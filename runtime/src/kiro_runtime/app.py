@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 
 from .config import Config
 from .identity import IdentityError, caller_from_headers
+from .kiro_config import MAX_BUNDLE_BYTES, KiroConfig, KiroConfigError, decode_bundle, manifest
 from .models import is_allowed, is_valid_model_id, resolve_default
 from .orchestrator import Orchestrator, TaskSpec
 from .secrets import SecretError
@@ -30,6 +31,7 @@ MAX_CONTEXT_BYTES = 1024 * 1024
 MAX_CRITERIA = 50
 MAX_CRITERION_CHARS = 2000
 MIN_TIMEOUT_SECONDS = 60
+MAX_KIRO_CONFIG_B64 = MAX_BUNDLE_BYTES * 4 // 3 + 4
 # `models` results are cached per microVM; listing runs kiro-cli and reads the API key secret.
 MODELS_CACHE_SECONDS = 300
 MODELS_LIST_TIMEOUT_SECONDS = 30
@@ -57,6 +59,9 @@ class SubmitRequest(BaseModel):
     effort: str | None = None
     max_iterations: int | None = Field(default=None, ge=1)
     timeout_seconds: int | None = Field(default=None, ge=MIN_TIMEOUT_SECONDS)
+    # base64 of a gzip tar with an allow-listed part of a .kiro directory (see kiro_config.py)
+    kiro_config: str | None = Field(default=None, max_length=MAX_KIRO_CONFIG_B64)
+    kiro_agent: str | None = None
 
     @field_validator("prompt")
     @classmethod
@@ -126,6 +131,22 @@ def resolve(req: SubmitRequest, cfg: Config) -> tuple[str | None, str, int, int]
             f"timeout_seconds must be between {MIN_TIMEOUT_SECONDS} and {cfg.max_timeout_seconds}"
         )
     return model, effort, max_iterations, timeout
+
+
+def load_kiro_config(req: SubmitRequest) -> tuple[KiroConfig | None, str | None]:
+    """Validate the optional kiro configuration bundle. Raises ValueError with a user-facing message."""
+    if req.kiro_config is None:
+        if req.kiro_agent is not None:
+            raise ValueError("kiro_agent requires kiro_config (kac submit --kiro-dir DIR --agent NAME)")
+        return None, None
+    try:
+        bundle = decode_bundle(req.kiro_config)
+    except KiroConfigError as e:
+        raise ValueError(f"kiro_config: {e}") from e
+    if req.kiro_agent is not None and req.kiro_agent not in bundle.agents:
+        available = ", ".join(sorted(bundle.agents)) or "none"
+        raise ValueError(f"kiro_agent {req.kiro_agent!r} is not in kiro_config; available: {available}")
+    return bundle, req.kiro_agent
 
 
 @dataclass
@@ -225,6 +246,10 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
         session_id = getattr(context, "session_id", None) or ""
         if not session_id:
             return error("VALIDATION_ERROR", 400, "missing runtime session id")
+        try:
+            bundle, kiro_agent = load_kiro_config(req)
+        except ValueError as e:
+            return error("VALIDATION_ERROR", 400, str(e))
 
         task_id = new_task_id()
         with lock:
@@ -243,6 +268,8 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
             effort=effort,
             max_iterations=max_iterations,
             timeout_seconds=timeout,
+            kiro_config=bundle,
+            kiro_agent=kiro_agent,
         )
         created = now_iso()
         try:
@@ -261,6 +288,7 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
                     "created_at": created,
                     "started_at": created,
                     "artifacts_prefix": f"s3://{cfg.artifacts_bucket}/{task_id}/",
+                    "kiro_config": {**manifest(bundle), "agent": kiro_agent} if bundle else None,
                 }
             )
         except Exception:

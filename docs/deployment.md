@@ -26,11 +26,11 @@ scripts/bootstrap.sh
 | Secret | 默认名称 | 内容 |
 |---|---|---|
 | Kiro API key | `prod/kiro/api-key` | 字符串，Kiro 门户生成的 API key（`ksk_` 开头）。参见 [Headless mode](https://kiro.dev/docs/cli/headless/) |
-| Git 凭证（可选） | `prod/kiro/git-credentials` | JSON 对象，每个键会作为一个环境变量注入 kiro-cli，例如 `{"GITHUB_TOKEN": "github_pat_..."}`。键名不能是 `PATH`、`HOME`、`KIRO_API_KEY`、`ARTIFACTS_DIR`，也不能以 `AWS_`、`LD_`、`KIRO_`、`PYTHON` 开头 |
+| Git 凭证 / 任务环境变量（可选） | `prod/kiro/git-credentials` | JSON 对象，每个键会作为一个环境变量注入 kiro-cli，例如 `{"GITHUB_TOKEN": "github_pat_...", "DOCS_API_TOKEN": "..."}`。同步过来的 MCP 配置里的 `${VAR}` 也从这里取值。键名不能是 `PATH`、`HOME`、`KIRO_API_KEY`、`ARTIFACTS_DIR`，也不能以 `AWS_`、`LD_`、`KIRO_`、`PYTHON` 开头 |
 
 镜像里已为 `github.com` 配置 Git credential helper，使用时才读取 `GITHUB_TOKEN`，所以 token 不会写入文件或 remote URL。
 
-不用 Git 凭证时，跳过该 secret，部署时传入 `-c gitCredentialsSecretName=NONE`。
+不用 Git 凭证时，跳过该 secret，部署时传入 `-c gitCredentialsSecretName=NONE`。这时同步的 MCP 配置里的 `${VAR}` 没有地方取值，需要用的话要先创建这个 secret，再用默认名称重新部署。
 
 使用其他 secret 名称时，脚本和 CDK 要使用同一个名称：
 

@@ -292,3 +292,56 @@ def test_models_without_usable_default(client):
     c, _ = build(list_model_details=lambda: [model("deepseek-3.2")])
     body = invoke(c, {"action": "models"}).json()
     assert body["default_model"] is None and body["models"][0]["allowed"] is False
+
+
+# kiro configuration bundles ------------------------------------------------------------------
+
+
+def bundle_b64(files=None):
+    from test_kiro_config import full_bundle, tar_bytes
+
+    return base64.b64encode(tar_bytes(files or full_bundle())).decode()
+
+
+def test_submit_with_kiro_config_and_agent(client):
+    build, ran, _ = client
+    c, store = build()
+    r = invoke(
+        c, {"action": "submit", "prompt": "x", "kiro_config": bundle_b64(), "kiro_agent": "aws-expert"}
+    )
+    assert r.json()["status"] == "RUNNING", r.text
+    for _ in range(50):
+        if ran:
+            break
+        time.sleep(0.05)
+    assert ran[0].kiro_agent == "aws-expert" and set(ran[0].kiro_config.agents) == {"aws-expert", "reviewer"}
+    recorded = store.items[0]["kiro_config"]
+    assert recorded["agent"] == "aws-expert" and recorded["mcp_servers"] == ["docs", "github", "off"]
+    assert "ghp_inline_secret_value" not in json.dumps(store.items[0])
+
+
+@pytest.mark.parametrize(
+    "extra, fragment",
+    [
+        ({"kiro_config": "!!notbase64"}, "kiro_config: kiro_config is not valid base64"),
+        ({"kiro_config": None, "kiro_agent": "aws-expert"}, "kiro_agent requires kiro_config"),
+        ({"kiro_agent": "nobody"}, "not in kiro_config; available: aws-expert, reviewer"),
+    ],
+)
+def test_submit_rejects_bad_kiro_config(client, extra, fragment):
+    build, ran, _ = client
+    c, store = build()
+    body = {"action": "submit", "prompt": "x", "kiro_config": bundle_b64(), **extra}
+    body = {k: v for k, v in body.items() if v is not None}
+    err = error_of(invoke(c, body), 400)
+    assert err["code"] == "VALIDATION_ERROR" and fragment in err["message"], err
+    assert store.items == [] and ran == []
+
+
+def test_submit_rejects_unsafe_bundle(client):
+    build, _, _ = client
+    c, store = build()
+    err = error_of(
+        invoke(c, {"action": "submit", "prompt": "x", "kiro_config": bundle_b64({"../x": "y"})}), 400
+    )
+    assert "unsafe path" in err["message"] and store.items == []

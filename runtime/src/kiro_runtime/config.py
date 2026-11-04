@@ -60,6 +60,8 @@ class Config:
     heartbeat_interval_seconds: int
     finalize_reserve_seconds: int
     kill_grace_seconds: int
+    # The runtime user's kiro-cli configuration directory; caller bundles are installed here.
+    kiro_home: Path
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -94,6 +96,7 @@ class Config:
             heartbeat_interval_seconds=_int(env, "HEARTBEAT_INTERVAL_SECONDS", 60),
             finalize_reserve_seconds=_int(env, "FINALIZE_RESERVE_SECONDS", 180),
             kill_grace_seconds=_int(env, "KILL_GRACE_SECONDS", 10),
+            kiro_home=Path(env.get("KIRO_HOME_DIR") or Path.home() / ".kiro"),
         )
         cfg.validate()
         return cfg

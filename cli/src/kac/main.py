@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import time
@@ -10,7 +11,7 @@ from typing import Annotated, Any
 
 import typer
 
-from . import auth
+from . import auth, bundle
 from . import config as config_mod
 from .api import Client, RequestError, ServerError, safe_join
 
@@ -193,6 +194,30 @@ def _read_lines(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _kiro_config_fields(kiro_dir: Path | None, agent: str | None) -> dict[str, str]:
+    """Pack --kiro-dir for the request, printing what is synced and any warnings to stderr."""
+    if kiro_dir is None:
+        if agent:
+            _err("--agent requires --kiro-dir (the agent is taken from that directory)")
+            raise typer.Exit(EXIT_REQUEST)
+        return {}
+    try:
+        packed = bundle.pack(kiro_dir)
+    except (bundle.BundleError, OSError) as e:
+        _err(f"--kiro-dir: {e}")
+        raise typer.Exit(EXIT_REQUEST) from e
+    if agent and agent not in packed.agents:
+        _err(f"agent {agent!r} not found in {kiro_dir}; available: {', '.join(packed.agents) or 'none'}")
+        raise typer.Exit(EXIT_REQUEST)
+    typer.echo(packed.summary(), err=True)
+    for warning in packed.warnings:
+        typer.echo(f"  warning: {warning}", err=True)
+    fields = {"kiro_config": base64.b64encode(packed.data).decode("ascii")}
+    if agent:
+        fields["kiro_agent"] = agent
+    return fields
+
+
 @app.command()
 def submit(
     prompt: Annotated[str, typer.Argument(help="Task description. Use '-' to read from stdin.")],
@@ -209,6 +234,17 @@ def submit(
     effort: Annotated[str | None, typer.Option(help="low | medium | high | xhigh | max")] = None,
     max_iterations: Annotated[int | None, typer.Option(min=1)] = None,
     timeout: Annotated[int | None, typer.Option(help="Task timeout in seconds.", min=60)] = None,
+    kiro_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--kiro-dir",
+            envvar="KAC_KIRO_DIR",
+            help="Sync MCP servers, skills, steering and agents from this .kiro directory (e.g. ~/.kiro).",
+        ),
+    ] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Merge this agent from --kiro-dir into every loop phase.")
+    ] = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Submit a task. Prints the task id."""
@@ -233,6 +269,7 @@ def submit(
     ):
         if value is not None:
             body[key] = value
+    body.update(_kiro_config_fields(kiro_dir, agent))
     result = _run(lambda: _client().submit(body))
     _emit(result, as_json, result.get("task_id"))
 

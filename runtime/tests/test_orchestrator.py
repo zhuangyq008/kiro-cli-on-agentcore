@@ -455,3 +455,69 @@ def test_secret_values_never_reach_s3_or_dynamodb(harness):
     assert API_KEY not in s3_text("loop/iterations/1/execution.md")
     assert API_KEY not in s3_text("output.md")
     assert API_KEY not in json.dumps(store.get("tsk_1"), default=str)
+
+
+def test_kiro_config_is_installed_merged_and_redacted(harness, tmp_path):
+    from test_kiro_config import full_bundle, tar_bytes
+
+    from kiro_runtime.kiro_config import parse_bundle
+
+    make, _, _, _, s3_text = harness
+    home = tmp_path / "agent-home" / ".kiro"
+    scenario = {
+        "agents": {
+            **PASS_SCENARIO["agents"],
+            "loop-execute": [{**EXEC_OK, "artifact_files": {"report.txt": "token ghp_inline_secret_value"}}],
+        }
+    }
+    orch, store, _ = make(
+        scenario,
+        spec_overrides={"kiro_config": parse_bundle(tar_bytes(full_bundle())), "kiro_agent": "aws-expert"},
+        cfg_overrides={"kiro_home": home},
+    )
+    assert orch.run() == "SUCCEEDED"
+    # Installed into the runtime user's ~/.kiro and merged into the phase agents.
+    assert (home / "skills" / "probe" / "SKILL.md").exists()
+    loop_exec = json.loads((home / "agents" / "loop-execute.json").read_text())
+    assert "@awsdocs" in loop_exec["tools"] and loop_exec["includeMcpJson"] is True
+    # Manifest and warnings are recorded; contents and MCP secrets are not.
+    item = store.get("tsk_1")
+    info = item["kiro_config"]
+    assert info["agent"] == "aws-expert" and info["skills"] == ["probe"]
+    assert any("DOCS_TOKEN" in w for w in info["warnings"])
+    assert json.loads(s3_text("loop/kiro_config.json"))["sha256"] == info["sha256"]
+    report = s3_text("output.md")
+    assert "## Kiro configuration" in report and "aws-expert" in report and "DOCS_TOKEN" in report
+    # Inline MCP secrets are redacted from everything the task uploads.
+    assert "ghp_inline_secret_value" not in s3_text("artifacts/report.txt")
+    assert "ghp_inline_secret_value" not in json.dumps(item, default=str)
+
+
+def test_task_without_kiro_config_leaves_the_loop_agents_alone(harness, tmp_path):
+    make, _, _, _, s3_text = harness
+    home = tmp_path / "untouched" / ".kiro"
+    orch, store, _ = make(PASS_SCENARIO, cfg_overrides={"kiro_home": home})
+    assert orch.run() == "SUCCEEDED"
+    assert not home.exists()  # nothing installed, the image's static loop agents are used
+    assert "kiro_config" not in store.get("tsk_1")
+    assert json.loads(s3_text("result.json"))["kiro_config"] is None
+    assert "## Kiro configuration" not in s3_text("output.md")
+    with pytest.raises(Exception, match="NoSuchKey"):
+        s3_text("loop/kiro_config.json")
+
+
+def test_kiro_config_install_failure_fails_the_task(harness, tmp_path):
+    from test_kiro_config import tar_bytes
+
+    from kiro_runtime.kiro_config import parse_bundle
+
+    make, agents, _, _, _ = harness
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("a file where ~/.kiro should be")
+    orch, store, _ = make(
+        {"agents": {}},
+        spec_overrides={"kiro_config": parse_bundle(tar_bytes({"steering/a.md": "x"}))},
+        cfg_overrides={"kiro_home": blocker},
+    )
+    assert orch.run() == "FAILED"
+    assert store.get("tsk_1")["error_code"] == "KIRO_CONFIG_INSTALL_FAILED" and agents() == []

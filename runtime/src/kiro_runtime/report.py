@@ -64,7 +64,26 @@ def build_result(
         ],
         "error_code": error_code,
         "error_message": error_message,
+        "kiro_config": state.kiro_config,
     }
+
+
+def _kiro_config_lines(info: dict[str, Any] | None) -> list[str]:
+    if not info:
+        return []
+    none = "none"
+    lines = [
+        "## Kiro configuration",
+        "",
+        f"- Agent: {info.get('agent') or '(loop agents only)'}",
+        f"- MCP servers: {', '.join(info.get('mcp_servers') or []) or none}",
+        f"- Skills: {', '.join(info.get('skills') or []) or none}",
+        f"- Steering files: {len(info.get('steering') or [])}",
+        f"- Files: {info.get('files')}, sha256 `{info.get('sha256')}`",
+    ]
+    if info.get("warnings"):
+        lines += ["", "Warnings:", *[f"- {w}" for w in info["warnings"]]]
+    return [*lines, ""]
 
 
 def _md_escape(text: str) -> str:
@@ -87,6 +106,7 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
     if result.get("error_code"):
         lines.append(f"- Error: `{result['error_code']}` {result.get('error_message') or ''}")
     lines.append("")
+    lines += _kiro_config_lines(state.kiro_config)
 
     req = state.requirements
     if req is not None:

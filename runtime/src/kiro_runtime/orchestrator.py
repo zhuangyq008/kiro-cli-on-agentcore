@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import phases, report
+from . import kiro_config, phases, report
 from .events import emit_metrics
 from .kiro_runner import KiroRunner, RunResult
 from .models import allowed_available, resolve_default
@@ -59,6 +60,9 @@ class TaskSpec:
     effort: str
     max_iterations: int
     timeout_seconds: int
+    # Optional caller-supplied kiro configuration (MCP servers, skills, steering, agents).
+    kiro_config: kiro_config.KiroConfig | None = None
+    kiro_agent: str | None = None
 
 
 class PhaseFailure(Exception):
@@ -103,6 +107,7 @@ class LoopState:
     assumption_history: list[dict] = field(default_factory=list)
     credits: float = 0.0
     effort_applied: bool = True
+    kiro_config: dict[str, Any] | None = None  # manifest and warnings, for the report
 
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -235,6 +240,29 @@ class Orchestrator:
                 "acceptance_criteria": self.spec.acceptance_criteria,
             },
         )
+        if self.spec.kiro_config is not None:
+            self._apply_kiro_config(self.spec.kiro_config, self.spec.kiro_agent)
+
+    def _apply_kiro_config(self, bundle: kiro_config.KiroConfig, agent: str | None) -> None:
+        """Install the caller's kiro configuration and merge it into the phase agents."""
+        # Inline MCP credentials must never appear in logs, records or artifacts.
+        self.d.redactor.add(kiro_config.secret_values(bundle, agent))
+        try:
+            kiro_config.install(bundle, agent, self.cfg.kiro_home)
+        except (OSError, ValueError, TypeError) as e:  # KiroConfigError is a ValueError
+            raise PhaseFailure(
+                "KIRO_CONFIG_INSTALL_FAILED", f"could not install kiro configuration: {e}"
+            ) from e
+        env = {**os.environ, **self._secrets_env}
+        info = {
+            **kiro_config.manifest(bundle),
+            "agent": agent,
+            "warnings": [self.d.redactor.redact(w) for w in kiro_config.warnings(bundle, agent, env)],
+        }
+        self.state.kiro_config = info
+        self.d.store.set_fields(self.spec.task_id, {"kiro_config": info})
+        self.d.uploader.put_text("loop/kiro_config.json", json.dumps(info, indent=2), "application/json")
+        self._log("kiro_config.installed", files=info["files"], agent=agent, warnings=len(info["warnings"]))
 
     def _loop(self) -> None:
         nxt = "UNDERSTAND"

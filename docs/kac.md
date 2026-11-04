@@ -78,8 +78,52 @@ kac submit "修复登录页的表单校验 bug，并提交 PR" \
 | `--effort` | low / medium / high / xhigh / max |
 | `--max-iterations` | 最多几轮“执行 + 验证”，默认 3 |
 | `--timeout` | 整个任务的超时秒数，覆盖所有阶段 |
+| `--kiro-dir` | 同步这个 `.kiro` 目录里的 MCP、skills、steering 和 agent，见[同步 Kiro 配置](#同步-kiro-配置mcpskillssteeringagent)。也可以用环境变量 `KAC_KIRO_DIR` |
+| `--agent` | 把 `--kiro-dir` 里的这个 agent 合并进每个阶段 |
 
 命令输出 task_id。每次提交都使用一个新的 Session，不支持在已有 Session 中追问。
+
+## 同步 Kiro 配置（MCP、skills、steering、agent）
+
+提交任务时可以把本地的 kiro 配置一起带上，任务在云端使用和本机相同的 MCP server、skills、steering 和自定义 agent：
+
+```bash
+kac submit "排查 Lambda 冷启动慢的原因" --kiro-dir ~/.kiro
+kac submit "评审这个 PR" --kiro-dir ./my-team/.kiro --agent code-reviewer
+export KAC_KIRO_DIR=~/.kiro   # 每次都带上时，可以用环境变量代替 --kiro-dir
+```
+
+**同步哪些内容**：只打包下面这些，目录里的其他内容（会话、日志、`settings/cli.json` 等）都留在本地。
+
+| 本地路径 | 云端效果 |
+|---|---|
+| `settings/mcp.json` | 4 个阶段都能调用这些 MCP server（`disabled: true` 的除外） |
+| `skills/<name>/SKILL.md`（以及同目录下的 scripts、references 等） | 4 个阶段都可以按需加载这些 skill |
+| `steering/*.md` | 作为规则加载到每个阶段的上下文 |
+| `agents/*.json`、`agents/*.md` | 用 `--agent NAME` 选中的 agent 会合并进每个阶段（见下文）。`.md` 文件只有带 YAML front matter 时才算 agent，其他 `.md`（例如被 `"prompt": "file://./x.md"` 引用的 prompt 文件）作为普通文件同步 |
+
+**`--agent` 的合并方式**：闭环的 4 个阶段必须使用服务自己的 agent，才能保证流程和交接文件格式，所以不会直接换成你的 agent，而是合并它的部分配置：
+
+- `prompt`：追加在闭环规则之后，作为补充指令。闭环规则优先，不能被它覆盖。
+- `mcpServers`：合并进来（`disabled: true` 的除外）。
+- `tools`：只接受指向 bundle 中声明过的 MCP server 的选择器（`@server`、`@server/tool`），`@builtin`、`*`、内置工具名都会被忽略。内置工具由闭环决定，验证阶段始终没有写文件的内置工具。
+- `resources`：只接受 `~/.kiro/...` 和工作区内的相对路径（`.kiro/...` 会自动指向同步过去的 `~/.kiro/...`）。绝对路径（例如 `/proc`、`~/.aws`）、包含 `..` 的路径和其他协议会被忽略并给出警告。
+- `model`、`hooks`、`permissions`、`allowedTools`、`toolsSettings` 会被忽略。模型由 `--model` 和服务端默认值决定。
+
+注意：MCP server 提供的工具在 4 个阶段都可以用，包括验证阶段。如果某个 MCP server 能修改文件或外部系统（例如 filesystem、git、Jira 写操作），验证阶段在技术上也能调用它，只是闭环规则要求验证阶段不修改任何东西。
+
+**MCP server 的运行环境**：容器里有 `npx`、`node`（Node.js 24）、`uvx`、`uv`、`python3`、`bash`、`git`、`aws`。使用本机绝对路径（例如 `/Users/me/bin/tool`）或 `docker` 启动的 server 在云端起不来。kiro-cli 会静默跳过启动失败的 server，所以 kac 在提交前会给出警告，任务报告里也会列出来。
+
+**MCP 里的密钥**：
+
+- 可以直接写明文（例如 `"env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}`）。明文随任务经 TLS 传到 microVM，不会保存到 DynamoDB 或 S3，服务端会把它加入脱敏列表，日志和产物里出现时替换为 `***REDACTED***`。
+- 更推荐写成 `${VAR}`，在服务端的"任务环境变量 secret"（默认 `prod/kiro/git-credentials`，JSON 的每个键都是一个环境变量）里提供值。引用了没有设置的变量时，kiro-cli 会把 `${VAR}` 原样传给 server，报告里会提示。
+- 不允许引用服务自己的凭证：MCP 配置的 command、url、args、env、headers 里出现 `KIRO_API_KEY` 或 `$AWS_...`（包括 `${env:...}`、`$VAR` 等写法）会被直接拒绝。这是纵深防御：MCP server 本身就是在 microVM 里运行的代码，能读到进程环境变量，所以只同步可信的配置。
+- 除了 env、headers，`args` 里形如 `--token xxx`、`--api-key=xxx` 的值和 URL 中 `?token=` 一类的参数也会被加入脱敏列表。
+
+**限制**：压缩后 5 MB 以内，解压后 20 MB 以内，最多 1000 个文件（含目录最多 2000 个条目），单个文件 5 MB 以内，agent 的 front matter 64 KB 以内、prompt 64K 字符以内，front matter 不能使用 YAML 别名。不支持符号链接，隐藏文件（以 `.` 开头）不同步；文件名不能含控制字符或特殊空白，单段不超过 255 个字符、整个路径不超过 1024 个字符。`agents/` 下以 `loop-` 开头的名字是保留名，会被跳过；agent 重名会直接报错。kac 在本地按和服务端相同的规则检查，有问题会在上传前报出来。
+
+提交时 kac 会打印同步了哪些内容和警告。任务结束后，`output.md` 的 "Kiro configuration" 一节和 `loop/kiro_config.json` 会记录清单（文件数、sha256、MCP server、skill、agent 的名字）和警告，不包含文件内容。
 
 ## 查看可用模型
 
@@ -158,5 +202,6 @@ kac result tsk_01J... --out ./result
 | `MODEL_UNAVAILABLE` | 当前 API key 不能使用所选模型，或默认优先级列表中没有可用的模型；错误信息列出可用的模型 |
 | `KIRO_AUTH_FAILED` | Kiro API key 无效 |
 | `SECRET_UNAVAILABLE` | 读取 secret 失败 |
+| `KIRO_CONFIG_INSTALL_FAILED` | 同步的 kiro 配置无法写入容器 |
 | `SESSION_LOST` | microVM 被回收，由 Sweeper 标记 |
 | `TASK_TIMEOUT` | 超时 |

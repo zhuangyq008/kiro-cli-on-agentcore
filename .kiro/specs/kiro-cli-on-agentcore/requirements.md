@@ -251,3 +251,17 @@
 9. THE 安装器 stack SHALL 在安装后保留；WHEN 用户用新版本代码重新运行向导 THEN 向导 SHALL 完成升级。
 10. WHEN 构建或部署失败 THEN 向导 SHALL 显示 CloudFormation 报告的失败原因和构建日志摘要，并提示修复后重新运行；首次部署失败 SHALL 不留下孤立的数据资源。
 11. THE 项目 SHALL 提供面向小白的图文步骤文档 `docs/cloudshell-install.md`，包括打开 CloudShell、获取代码、运行向导、登录、提交第一个任务、升级、常见问题和卸载。
+
+### 需求 16：同步调用方的 Kiro 配置（MCP、skills、steering、agent）
+
+**用户故事：** 作为调用方，我希望提交任务时带上本地的 kiro 配置，让云端任务能使用和我本机一样的 MCP server、skills、steering 规则和自定义 agent。
+
+#### 验收标准
+
+1. THE `kac submit` SHALL 支持 `--kiro-dir DIR`（或环境变量 `KAC_KIRO_DIR`），只打包 `settings/mcp.json`、`skills/<name>/**`、`steering/**`、`agents/**`，不打包目录中的其他内容；打包结果 SHALL 是确定性的（相同内容得到相同 sha256）。
+2. THE Runtime SHALL 在提交时校验配置包：只接受普通文件，拒绝绝对路径、`..`、符号链接和硬链接、白名单以外的路径、以 `loop-` 开头的 agent 名，并限制压缩后 5 MB、解压后 20 MB、1000 个文件；WHEN 校验失败 THEN 返回 `VALIDATION_ERROR` 且不创建任务。
+3. THE Runtime SHALL 在 PREFLIGHT 把配置写入运行用户的 `~/.kiro`，并为该任务重新生成 4 个阶段 agent：加载 steering 和 skills、包含 `mcp.json` 中启用的 MCP server 并开放其工具。
+4. WHEN 指定 `--agent NAME` THEN 系统 SHALL 把该 agent 的 prompt（追加在闭环规则之后）、`mcpServers`、MCP 工具选择器和 `resources` 合并进每个阶段；SHALL 忽略其 `model`、`hooks`、`permissions` 等字段；验证阶段 SHALL 始终没有写文件的工具。
+5. THE 系统 SHALL 把 MCP 配置中明文的 env、headers 值加入脱敏列表；SHALL 不在 DynamoDB、S3、日志或事件中保存配置内容，只保存清单（文件数、sha256、MCP server、skill、agent 名称）和警告。
+6. THE 系统 SHALL 支持 MCP 配置使用 `${VAR}` 引用任务环境变量 secret 中的值；WHEN 引用的变量未设置、或 MCP server 的启动命令在镜像中不存在 THEN 系统 SHALL 在任务记录和最终报告中给出警告。
+7. THE Runtime 镜像 SHALL 包含 Node.js LTS 和 uv，使 `npx`、`uvx` 方式启动的 MCP server 可以运行。

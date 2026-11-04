@@ -45,6 +45,7 @@ cd ../cli && uv tool install --python 3.12 '.[aws]'   # 安装 kac
 kac configure --from-stack KiroAgentCoreStack
 kac login
 kac models                                 # 查看可用模型（Claude、GPT 等，取决于 Kiro API key）
+kac submit "..." --kiro-dir ~/.kiro --agent my-agent   # 带上本地的 MCP、skills、steering 和 agent
 kac submit "修复 issue #12 并提 PR" --context "仓库: https://github.com/org/repo" --ac "所有现有测试通过"
 kac wait <task_id> && kac result <task_id>
 ```
@@ -75,5 +76,6 @@ kiro-cli 以 `--trust-all-tools` 运行，agent 可以在容器内执行任意�
 - **执行角色只读**：执行角色挂载 `ReadOnlyAccess`，并显式 Deny IAM、AssumeRole、S3 删除、secret 修改等操作。
 - **microVM 隔离**：每个任务一个 microVM，任务结束 5 分钟后回收。
 - **凭证最小化**：Git token 只授权给 agent 需要操作的仓库，建议使用 fine-grained token。
+- **同步的 kiro 配置**：`--kiro-dir` 带上的 MCP server 在 microVM 里以同样的权限运行，可以访问执行角色的只读权限和任务环境变量。只同步可信的配置。MCP 配置里的明文密钥会随任务传输，最好改用 `${VAR}` 并放到任务环境变量 secret 里。
 
 已知风险：仓库内容里的 prompt injection 可能让 agent 执行恶意命令、外传容器内的凭证，或改写本服务自己的任务记录和产物。所有任务共用同一个 Kiro API key，用量和限流会集中在这个 key 上。闭环模式下，每个任务至少运行 4 次 kiro-cli。

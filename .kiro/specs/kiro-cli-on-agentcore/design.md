@@ -129,6 +129,14 @@ Runtime 配置 `requestHeaderAllowlist: ["Authorization"]`，容器代码就能�
 - wrapper 的日志、任务记录中的文本字段、上传到 S3 的所有文本文件，在写出前都会把已知 secret 的值替换为 `***REDACTED***`。
 - 在 `--trust-all-tools` 下，agent 本身能读到这些环境变量，所以脱敏只能防止凭证意外出现在输出中，防不了恶意外传（见“已知风险”）。
 
+### D8：调用方的 Kiro 配置随任务同步，合并进阶段 agent
+
+- `kac submit --kiro-dir` 只打包白名单内的路径（`settings/mcp.json`、`skills/`、`steering/`、`agents/`），生成确定性的 gzip tar，base64 后放在提交请求的 `kiro_config` 字段中；`--agent` 放在 `kiro_agent` 字段中。
+- Runtime 在提交时于内存中解析并校验（不使用 `tarfile.extract`），PREFLIGHT 时写入 `~/.kiro`。每个任务都在新的 microVM 中运行，所以配置之间互不影响。
+- 自定义 agent 默认不加载 skills、steering 和 `mcp.json`，所以必须为每个任务重新生成 4 个阶段 agent：`resources` 增加 `file://~/.kiro/steering/**/*.md` 和 `skill://~/.kiro/skills/*/SKILL.md`，设置 `includeMcpJson: true`，`tools` 增加每个启用的 server 的 `@name`。以上行为已在 kiro-cli 2.35.2 headless V3 下实测确认。
+- `--agent` 不替换阶段 agent，只合并 prompt（追加在闭环规则之后）、`mcpServers`、MCP 工具选择器和 `resources`；内置工具集、模型和 hooks 仍由闭环决定。
+- kiro-cli 会静默跳过启动失败的 MCP server，并把未设置的 `${VAR}` 原样传递，所以 kac 在提交前、Runtime 在 PREFLIGHT 都会检查并给出警告。
+
 ## 闭环状态机
 
 ```mermaid
