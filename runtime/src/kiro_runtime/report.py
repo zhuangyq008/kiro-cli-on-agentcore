@@ -80,7 +80,7 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
         f"- Status: **{status}**. {STATUS_TEXT.get(status, '')}",
         f"- Iterations: {state.iteration} / {spec.max_iterations}",
         f"- Acceptance criteria passed: {passed} / {len(result['criteria'])}",
-        f"- Model: {spec.model}, effort: {spec.effort}"
+        f"- Model: {spec.model or '(not selected)'}, effort: {spec.effort}"
         + ("" if state.effort_applied else " (not supported by this model, ignored)"),
         f"- Credits used: {result['credits_used']:.4f}",
     ]

@@ -154,7 +154,7 @@ stateDiagram-v2
 - **回退目标**：由验证报告的 `next` 字段建议（`execute` / `plan` / `understand`）。缺失或不合法时，默认回到 `execute`。
 - **反馈传递**：Orchestrator 把最近一次验证报告中未通过的条目和反馈写入 `loop/feedback.json`，作为回退目标阶段的输入。
 - **终态**：FINALIZE 根据结论设定状态：全部通过为 `SUCCEEDED`，达到上限仍未通过为 `INCOMPLETE`。任何阶段出现不可恢复的错误，都会跳到 FINALIZE，并设为 `FAILED` 或 `TIMED_OUT`。
-- **PREFLIGHT**：每个任务都在新的 microVM 中运行，所以每次都会读取 secrets，并运行 `kiro-cli chat --list-models -f json`，确认请求的模型对当前 API key 可用。失败时任务以 `FAILED` 结束（`error_code=MODEL_UNAVAILABLE` / `SECRET_UNAVAILABLE` / `KIRO_AUTH_FAILED`）。
+- **PREFLIGHT**：每个任务都在新的 microVM 中运行，所以每次都会读取 secrets，并运行 `kiro-cli chat --list-models -f json`，确认请求的模型对当前 API key 可用；未指定模型时，按 `DEFAULT_MODEL` 优先级列表选第一个可用且被允许的模型，并写回任务记录。失败时任务以 `FAILED` 结束（`error_code=MODEL_UNAVAILABLE` / `SECRET_UNAVAILABLE` / `KIRO_AUTH_FAILED`）。
 - **FINALIZE 不调用 kiro-cli**：最终报告由代码根据各阶段文件按模板生成，保证内容和过程文件一致。
 
 ### 各阶段约定
@@ -297,6 +297,12 @@ stateDiagram-v2
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | 参数缺失或类型错误；model、effort 不在允许列表中；超时值或轮数越界 |
 | `SESSION_BUSY` | 409 | 该 Session 已经运行过或正在运行任务 |
+| `UNAUTHORIZED` | 401 | 请求头中没有可解析的调用方身份（正常情况下 authorizer 已拦截） |
+| `SECRET_UNAVAILABLE` / `KIRO_AUTH_FAILED` / `MODEL_LIST_FAILED` | 502 | `models` 请求读取 secret 或列出模型失败 |
+
+HTTP 状态码始终为 200，`http_status` 只出现在响应体中：AgentCore 会把容器返回的非 2xx 响应替换为通用的 HTTP 424，调用方会丢失错误信息。
+
+`{"action": "models"}` 请求返回 API key 可用的模型（`model_id`、`description`、`rate_multiplier`、`context_window_tokens`、`allowed`），以及 `default_model`、`default_preference`、`allowed_patterns`。它不创建任务，也不占用 Session。
 | `INTERNAL_ERROR` | 500 | 其他错误 |
 
 缺少 token 或 token 无效时，由 AgentCore 直接返回 401，请求不会到达容器。
@@ -392,8 +398,8 @@ stream-json 事件的用途：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DEFAULT_MODEL` | `claude-sonnet-5.5` | |
-| `ALLOWED_MODELS` | `auto,claude-sonnet-5.5,claude-opus-5.5,claude-haiku-5.5` | ID 已用 `kiro-cli chat --list-models` 确认 |
+| `DEFAULT_MODEL` | `claude-sonnet-5.5,gpt-5.6-terra,auto` | 优先级列表，取第一个 API key 可用的；每项必须被 `ALLOWED_MODELS` 允许 |
+| `ALLOWED_MODELS` | `auto,claude-*,gpt-*` | 精确 ID 或 `*` / `?` 通配符；ID 已用 `kiro-cli chat --list-models` 确认 |
 | `DEFAULT_EFFORT` | `high` | |
 | `ALLOWED_EFFORTS` | `low,medium,high,xhigh,max` | |
 | `DEFAULT_MAX_ITERATIONS` | `3` | |
@@ -443,6 +449,7 @@ Python 包，依赖 `typer`、`httpx`，作为 `kac` 命令安装（`pipx instal
 | `kac configure [--from-stack NAME]` | 写入 `~/.config/kac/config.toml`；`--from-stack` 从 CloudFormation 输出读取（需要本地 AWS 凭证，只在配置时用一次） |
 | `kac login` | 打开浏览器走 PKCE 流程，在本地 8765 端口接收回调，token 保存到 `~/.config/kac/tokens.json`（权限 0600）；过期时自动用 refresh token 刷新 |
 | `kac submit PROMPT [--context TEXT \| --context-file PATH] [--ac TEXT ...] [--ac-file PATH] [--model] [--effort] [--max-iterations N] [--timeout SEC]` | 生成新的 session ID 并提交；输出 task_id |
+| `kac models [--all]` | 列出服务的 API key 可用的模型、费率倍数、是否被允许，`*` 标记默认模型 |
 | `kac status TASK_ID` | 显示状态、当前阶段和轮次（如 `RUNNING  VERIFY 2/3`）、各阶段耗时 |
 | `kac wait TASK_ID [--interval 15]` | 轮询到终态，阶段变化时打印一行 |
 | `kac result TASK_ID [--out DIR]` | 下载全部产物，默认下载到 `./<task_id>/` |

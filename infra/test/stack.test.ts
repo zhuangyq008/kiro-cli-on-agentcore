@@ -3,8 +3,8 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { KiroAgentCoreStack } from '../lib/kiro-agentcore-stack';
 
 const config = {
-  defaultModel: 'claude-sonnet-5.5',
-  allowedModels: ['auto', 'claude-sonnet-5.5'],
+  defaultModels: ['claude-sonnet-5.5', 'gpt-5.6-terra', 'auto'],
+  allowedModels: ['auto', 'claude-*', 'gpt-*'],
   defaultEffort: 'high',
   allowedEfforts: ['low', 'high'],
   defaultMaxIterations: 3,
@@ -103,7 +103,8 @@ test('runtime uses public network, JWT auth with scope, header allowlist and lif
     RequestHeaderConfiguration: { RequestHeaderAllowlist: ['Authorization'] },
     LifecycleConfiguration: { IdleRuntimeSessionTimeout: 300, MaxLifetime: 28800 },
     EnvironmentVariables: Match.objectLike({
-      DEFAULT_MODEL: 'claude-sonnet-5.5',
+      DEFAULT_MODEL: 'claude-sonnet-5.5,gpt-5.6-terra,auto',
+      ALLOWED_MODELS: 'auto,claude-*,gpt-*',
       KIRO_API_KEY_SECRET_NAME: 'prod/kiro/api-key',
       DEFAULT_MAX_ITERATIONS: '3',
     }),
@@ -165,4 +166,20 @@ test('cognito: no self sign-up; CLI client is public, machine client uses client
     GenerateSecret: true,
     AllowedOAuthFlows: ['client_credentials'],
   });
+});
+
+test('synth fails when a default model is not covered by the allow list', () => {
+  const app = new App();
+  expect(
+    () =>
+      new KiroAgentCoreStack(app, 'BadStack', {
+        env: { account: '111111111111', region: 'us-east-1' },
+        config: { ...config, defaultModels: ['gpt-5.6-sol'], allowedModels: ['claude-*'] },
+      }),
+  ).toThrow(/not permitted/);
+});
+
+test('model settings are exported for install.sh upgrades', () => {
+  template.hasOutput('DefaultModels', { Value: 'claude-sonnet-5.5,gpt-5.6-terra,auto' });
+  template.hasOutput('AllowedModels', { Value: 'auto,claude-*,gpt-*' });
 });

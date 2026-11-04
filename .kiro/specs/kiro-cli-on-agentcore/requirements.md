@@ -45,10 +45,10 @@
 
 1. WHEN 调用方提交任务 THEN Runtime SHALL 在 5 秒内返回 `task_id` 和初始状态，并在后台继续执行。
 2. THE 提交请求 SHALL 包含 `prompt`（必填），并可选包含 `context`（附加上下文，如仓库地址、分支、说明）、`acceptance_criteria`（验收标准列表）、`model`、`effort`、`max_iterations`、`timeout_seconds`。
-3. WHEN 提交请求参数校验失败 THEN 系统 SHALL 返回 400 及具体错误信息，且不创建任务。
+3. WHEN 提交请求参数校验失败 THEN 系统 SHALL 返回错误码 `VALIDATION_ERROR`（`http_status` 400）及具体错误信息，且不创建任务。错误放在 HTTP 200 的响应体中，因为 AgentCore 会把容器返回的非 2xx 响应替换成通用的 424，调用方将看不到错误信息。
 4. WHEN 任务被接受 THEN 系统 SHALL 在 DynamoDB 中写入任务记录，状态为 `RUNNING`。
 5. WHILE 任务执行中 THE Runtime SHALL 通过 `/ping` 上报 `HealthyBusy`，防止 Session 因空闲被回收。
-6. THE 每个 Session SHALL 只运行一个任务；WHEN 请求发往已运行过任务或正在运行任务的 Session THEN 系统 SHALL 拒绝请求并返回 409。
+6. THE 每个 Session SHALL 只运行一个任务；WHEN 请求发往已运行过任务或正在运行任务的 Session THEN 系统 SHALL 拒绝请求并返回错误码 `SESSION_BUSY`（`http_status` 409）。
 
 ### 需求 3：闭环执行
 
@@ -106,11 +106,12 @@
 #### 验收标准
 
 1. THE 系统 SHALL 支持在提交请求中指定 `model` 和 `effort`（low / medium / high / xhigh / max），同一任务的所有阶段使用相同的值。
-2. WHEN 请求未指定 `model` THEN 系统 SHALL 使用默认模型 `claude-sonnet-5.5`；WHEN 未指定 `effort` THEN 使用服务端配置的默认值。
-3. THE 系统 SHALL 支持服务端配置允许的模型列表和 effort 列表；WHEN 请求值不在允许列表中 THEN 系统 SHALL 返回 400。
+2. WHEN 请求未指定 `model` THEN 系统 SHALL 按服务端配置的默认模型优先级列表（默认 `claude-sonnet-5.5`、`gpt-5.6-terra`、`auto`），使用第一个当前 API key 可用的模型；WHEN 未指定 `effort` THEN 使用服务端配置的默认值。
+3. THE 系统 SHALL 支持服务端配置允许的模型列表（精确 ID 或 `*` / `?` 通配符，默认 `auto`、`claude-*`、`gpt-*`）和 effort 列表；WHEN 请求值不在允许列表中或不是合法的模型 ID THEN 系统 SHALL 返回 `VALIDATION_ERROR`。
 4. THE 默认值和允许列表 SHALL 可通过部署参数修改，无需改代码。
 5. WHEN 任务开始执行 THEN 系统 SHALL 先用当前 API key 查询可用模型，确认请求的模型可用；WHEN 不可用 THEN 任务 SHALL 以 `FAILED` 结束，并给出明确的错误码。
 6. THE 任务记录 SHALL 保存实际使用的 `model` 和 `effort`。
+7. THE 系统 SHALL 提供查询可用模型的接口（`kac models`），列出当前 API key 可用的模型、费率倍数、是否被允许，以及未指定模型时会使用的默认模型。
 
 ### 需求 7：任务状态、进度与超时
 

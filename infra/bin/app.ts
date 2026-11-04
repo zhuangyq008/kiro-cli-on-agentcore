@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { App } from 'aws-cdk-lib';
 import { KiroAgentCoreConfig, KiroAgentCoreStack } from '../lib/kiro-agentcore-stack';
+import { parseList } from '../lib/model-config';
 
 const app = new App();
 
@@ -14,10 +15,11 @@ function ctx<T>(key: string): T {
 
 const account = process.env.CDK_DEFAULT_ACCOUNT;
 const config: KiroAgentCoreConfig = {
-  defaultModel: ctx('defaultModel'),
-  allowedModels: ctx('allowedModels'),
+  // Lists may come from cdk.json (arrays) or from `-c key=a,b` (strings).
+  defaultModels: parseList(ctx('defaultModel'), 'defaultModel'),
+  allowedModels: parseList(ctx('allowedModels'), 'allowedModels'),
   defaultEffort: ctx('defaultEffort'),
-  allowedEfforts: ctx('allowedEfforts'),
+  allowedEfforts: parseList(ctx('allowedEfforts'), 'allowedEfforts'),
   defaultMaxIterations: Number(ctx('defaultMaxIterations')),
   maxIterationsLimit: Number(ctx('maxIterationsLimit')),
   defaultTimeoutSeconds: Number(ctx('defaultTimeoutSeconds')),

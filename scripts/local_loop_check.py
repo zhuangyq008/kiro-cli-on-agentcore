@@ -96,7 +96,8 @@ def main() -> int:
         ),
         context="",
         acceptance_criteria=["Running `python -m pytest -q` in /workspace/work/calc passes with at least one test"],
-        model=os.environ.get("CHECK_MODEL", cfg.default_model),
+        # Unset: the orchestrator picks the first default model the API key offers.
+        model=os.environ.get("CHECK_MODEL") or None,
         effort=os.environ.get("CHECK_EFFORT", "low"),
         max_iterations=int(os.environ.get("CHECK_MAX_ITERATIONS", "2")),
         timeout_seconds=int(os.environ.get("CHECK_TIMEOUT", "1800")),

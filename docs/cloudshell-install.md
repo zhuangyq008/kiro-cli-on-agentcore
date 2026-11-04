@@ -58,6 +58,14 @@ cd kiro-cli-on-agentcore
 | 7. 创建登录用户 | 输入你的邮箱 |
 | 8. 冒烟测试 | 自动运行，约 5 到 10 分钟 |
 
+**模型**：不需要额外设置。Kiro API key 有 Claude 时默认用 `claude-sonnet-5.5`，只有 GPT 时默认用 `gpt-5.6-terra`，都没有时用 `auto`。想指定默认模型或限制可用的模型，在启动向导时加参数，例如：
+
+```bash
+./install.sh --default-model gpt-5.6-sol,auto --allowed-models 'gpt-*,auto'
+```
+
+`--default-model` 是优先级列表，按顺序取第一个可用的；`--allowed-models` 可以用 `*` 通配符。升级时不带这两个参数会沿用当前设置。
+
 **等待期间请注意：**
 
 - CloudShell 在键盘空闲 20 到 30 分钟后会断开。请每隔 15 分钟左右在窗口里按一次回车。
@@ -133,6 +141,8 @@ git pull            # 方式 A；方式 B 则重新上传并解压新的 zip 包
 | 没收到临时密码邮件 | 检查垃圾邮件；重新运行 `./install.sh`，在“创建登录用户”一步输入同一个邮箱，选择重新发送 |
 | `kac login` 粘贴后报错 `does not belong to this login attempt` | 每次 `kac login` 生成的网址只能用一次，请重新执行 `kac login` |
 | `kac` 提示认证错误（退出码 10） | 登录已过期，重新执行 `kac login` |
+| 任务失败，错误码 `MODEL_UNAVAILABLE` | Kiro API key 不能用所选模型。执行 `kac models` 查看可用的模型，提交时用 `--model` 指定；或用 `./install.sh --default-model ...` 修改默认模型 |
+| 冒烟测试提示 `none of the default models is available` | 默认优先级列表里的模型 API key 都不能用。按上面的说明加 `--default-model` 重新运行 `./install.sh` |
 
 ## 部署了哪些东西
 

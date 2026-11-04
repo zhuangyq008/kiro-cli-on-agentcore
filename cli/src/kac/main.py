@@ -90,7 +90,8 @@ def describe(task: dict[str, Any]) -> str:
     if summary:
         lines.append(f"criteria passed: {summary.get('passed')}/{summary.get('total')}")
     lines.append(
-        f"model: {task.get('model')}  effort: {task.get('effort')}  credits: {task.get('credits_used', 0)}"
+        f"model: {task.get('model') or '(default)'}  effort: {task.get('effort')}  "
+        f"credits: {task.get('credits_used', 0)}"
     )
     if task.get("error_code"):
         lines.append(f"error: {task['error_code']} {task.get('error_message') or ''}".rstrip())
@@ -201,7 +202,10 @@ def submit(
     ac_file: Annotated[
         Path | None, typer.Option(exists=True, dir_okay=False, help="One criterion per line.")
     ] = None,
-    model: Annotated[str | None, typer.Option()] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(help="Model ID (see `kac models`). Default: the server's preferred available model."),
+    ] = None,
     effort: Annotated[str | None, typer.Option(help="low | medium | high | xhigh | max")] = None,
     max_iterations: Annotated[int | None, typer.Option(min=1)] = None,
     timeout: Annotated[int | None, typer.Option(help="Task timeout in seconds.", min=60)] = None,
@@ -289,6 +293,42 @@ def result(
         as_json,
         f"downloaded {len(files)} file(s) to {root}" + (f"\nreport: {root / 'output.md'}" if files else ""),
     )
+
+
+def _models_text(data: dict[str, Any], show_all: bool) -> str:
+    default = data.get("default_model")
+    lines = []
+    for m in data.get("models", []):
+        if not (show_all or m.get("allowed")):
+            continue
+        rate = m.get("rate_multiplier")
+        rate_text = f"{rate:g}x" if isinstance(rate, int | float) else "-"
+        mark = "*" if m.get("model_id") == default else " "
+        note = "" if m.get("allowed") else "  (not allowed)"
+        lines.append(
+            f"{mark} {m.get('model_id', ''):<22} {rate_text:>6}  {(m.get('description') or '')[:60]}{note}"
+        )
+    lines.append("")
+    if default:
+        lines.append(f"default: {default}  (marked *, used when --model is not given)")
+    else:
+        lines.append("no default model is available to this API key; pass --model explicitly")
+    lines.append(f"default preference: {', '.join(data.get('default_preference') or [])}")
+    lines.append(f"allowed patterns:   {', '.join(data.get('allowed_patterns') or [])}")
+    lines.append("rate = Kiro credit multiplier")
+    return "\n".join(lines)
+
+
+@app.command()
+def models(
+    show_all: Annotated[
+        bool, typer.Option("--all", help="Also list models the server does not allow.")
+    ] = False,
+    as_json: JsonOpt = False,
+) -> None:
+    """List the models the service's Kiro API key can use."""
+    data = _run(lambda: _client().models())
+    _emit(data, as_json, _models_text(data, show_all))
 
 
 @app.command("list")

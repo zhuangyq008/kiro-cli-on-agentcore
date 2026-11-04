@@ -23,8 +23,8 @@ def jwt(claims: dict) -> str:
 
 def test_config_defaults():
     cfg = Config.from_env(BASE_ENV)
-    assert cfg.default_model == "claude-sonnet-5.5"
-    assert "claude-sonnet-5.5" in cfg.allowed_models
+    assert cfg.default_models == ("claude-sonnet-5.5", "gpt-5.6-terra", "auto")
+    assert cfg.allowed_models == ("auto", "claude-*", "gpt-*")
     assert cfg.default_max_iterations == 3
     assert cfg.max_iterations_limit == 5
     assert cfg.kiro_api_key_secret_name == "prod/kiro/api-key"
@@ -38,11 +38,27 @@ def test_config_empty_git_secret_disables_it():
     assert cfg.git_credentials_secret_name is None
 
 
+def test_config_model_preference_and_patterns():
+    env = {**BASE_ENV, "DEFAULT_MODEL": " gpt-5.6-sol , auto ", "ALLOWED_MODELS": "gpt-*,auto"}
+    cfg = Config.from_env(env)
+    assert cfg.default_models == ("gpt-5.6-sol", "auto")
+    assert cfg.allowed_models == ("gpt-*", "auto")
+    cfg = Config.from_env({**BASE_ENV, "DEFAULT_MODEL": "deepseek-3.2", "ALLOWED_MODELS": "*"})
+    assert cfg.default_models == ("deepseek-3.2",)
+
+
 @pytest.mark.parametrize(
     "override",
     [
         {"TASKS_TABLE": ""},
-        {"DEFAULT_MODEL": "gpt-x"},
+        {"DEFAULT_MODEL": "deepseek-3.2"},  # not covered by the default allow list
+        {"DEFAULT_MODEL": "gpt-5.6-sol", "ALLOWED_MODELS": "claude-*"},
+        {"DEFAULT_MODEL": "-h", "ALLOWED_MODELS": "*"},
+        {"DEFAULT_MODEL": "gpt-*"},  # defaults must be concrete IDs, not patterns
+        {"DEFAULT_MODEL": ""},
+        {"ALLOWED_MODELS": ""},
+        {"ALLOWED_MODELS": "gpt 5,auto"},
+        {"ALLOWED_MODELS": "[a-z]*"},
         {"ALLOWED_EFFORTS": "low,turbo"},
         {"DEFAULT_EFFORT": "max", "ALLOWED_EFFORTS": "low,high"},
         {"DEFAULT_MAX_ITERATIONS": "9"},

@@ -54,6 +54,28 @@ def _raise_for(resp: httpx.Response) -> None:
     raise RequestError(message, code, resp.status_code)
 
 
+def _raise_body_error(data: Any) -> None:
+    """Raise for an error the runtime returned in the body.
+
+    The runtime always answers HTTP 200 and puts the intended status in `error.http_status`,
+    because AgentCore replaces non-2xx container responses with a generic HTTP 424.
+    """
+    err = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(err, dict):
+        return
+    code = str(err.get("code") or "REQUEST_ERROR")
+    message = str(err.get("message") or "rejected")
+    try:
+        status = int(err.get("http_status") or 400)
+    except (TypeError, ValueError):
+        status = 400
+    if status in (401, 403):
+        raise AuthError(f"{code}: {message}")
+    if status >= 500:
+        raise ServerError(f"{code}: {message}")
+    raise RequestError(message, code, status)
+
+
 class Client:
     def __init__(self, cfg: Config, token: str, http: httpx.Client | None = None) -> None:
         self.cfg = cfg
@@ -70,22 +92,29 @@ class Client:
         _raise_for(resp)
         return resp
 
-    def submit(self, body: dict[str, Any], session_id: str | None = None) -> dict[str, Any]:
-        session_id = session_id or new_session_id()
+    def _invoke(self, body: dict[str, Any], session_id: str | None = None) -> dict[str, Any]:
         resp = self._call(
             "POST",
             self.cfg.invoke_url,
-            json={"action": "submit", **body},
+            json=body,
             headers={
-                "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id,
+                "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id or new_session_id(),
                 "Content-Type": "application/json",
             },
         )
-        data = resp.json()
-        if isinstance(data, dict) and isinstance(data.get("error"), dict):
-            err = data["error"]
-            raise RequestError(err.get("message", "rejected"), err.get("code", "REQUEST_ERROR"))
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise ServerError(f"runtime returned a non-JSON response: {resp.text[:200]}") from e
+        _raise_body_error(data)
         return data
+
+    def submit(self, body: dict[str, Any], session_id: str | None = None) -> dict[str, Any]:
+        return self._invoke({"action": "submit", **body}, session_id)
+
+    def models(self) -> dict[str, Any]:
+        """Models the service's Kiro API key offers, with the server's allow list and default."""
+        return self._invoke({"action": "models"})
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         return self._call("GET", f"{self.cfg.query_api_url}/tasks/{task_id}").json()

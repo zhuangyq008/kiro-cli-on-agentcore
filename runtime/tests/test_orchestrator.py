@@ -9,7 +9,7 @@ from conftest import BUCKET
 
 from kiro_runtime.artifacts import ArtifactUploader
 from kiro_runtime.config import Config
-from kiro_runtime.kiro_runner import KiroRunner, list_models
+from kiro_runtime.kiro_runner import KiroRunner, list_model_details, list_models
 from kiro_runtime.orchestrator import Deps, Orchestrator, TaskSpec
 from kiro_runtime.redact import Redactor
 from kiro_runtime.secrets import SecretError, Secrets
@@ -351,10 +351,68 @@ def test_timeout(harness):
 
 def test_preflight_model_unavailable(harness):
     make, agents, _, _, _ = harness
-    orch, store, _ = make({"agents": {}}, models=("auto",))
+    orch, store, _ = make({"agents": {}}, models=("auto", "deepseek-3.2"))
     assert orch.run() == "FAILED"
     assert agents() == []
-    assert store.get("tsk_1")["error_code"] == "MODEL_UNAVAILABLE"
+    item = store.get("tsk_1")
+    assert item["error_code"] == "MODEL_UNAVAILABLE"
+    # The message tells the caller what they can use instead (only allowed models are listed).
+    assert "available: auto" in item["error_message"] and "deepseek" not in item["error_message"]
+
+
+PASS_SCENARIO = {
+    "agents": {
+        "loop-understand": [UNDERSTAND_OK],
+        "loop-plan": [PLAN_OK],
+        "loop-execute": [EXEC_OK],
+        "loop-verify": [verify_step(verify())],
+    }
+}
+
+
+def _models_passed(calls):
+    return {c["args"][c["args"].index("--model") + 1] for c in calls() if "--model" in c["args"]}
+
+
+def test_default_model_resolves_to_first_available_preference(harness):
+    make, _, calls, _, s3_text = harness
+    # A key without Claude access: the preference list falls through to GPT.
+    orch, store, _ = make(
+        PASS_SCENARIO, models=("auto", "gpt-5.6-sol", "gpt-5.6-terra"), spec_overrides={"model": None}
+    )
+    assert orch.run() == "SUCCEEDED"
+    assert _models_passed(calls) == {"gpt-5.6-terra"}
+    assert store.get("tsk_1")["model"] == "gpt-5.6-terra"
+    assert json.loads(s3_text("result.json"))["model"] == "gpt-5.6-terra"
+
+
+def test_explicit_gpt_model_is_used(harness):
+    make, _, calls, _, _ = harness
+    orch, store, _ = make(PASS_SCENARIO, models=("gpt-5.6-luna",), spec_overrides={"model": "gpt-5.6-luna"})
+    assert orch.run() == "SUCCEEDED"
+    assert _models_passed(calls) == {"gpt-5.6-luna"}
+
+
+def test_default_model_none_available(harness):
+    make, agents, _, _, s3_text = harness
+    orch, store, _ = make({"agents": {}}, models=("deepseek-3.2",), spec_overrides={"model": None})
+    assert orch.run() == "FAILED"
+    assert agents() == []
+    item = store.get("tsk_1")
+    assert item["error_code"] == "MODEL_UNAVAILABLE"
+    assert "claude-sonnet-5.5, gpt-5.6-terra, auto" in item["error_message"]
+    assert "model" not in item  # nothing was selected
+    report = s3_text("output.md")
+    assert "**FAILED**" in report and "Model: (not selected)" in report
+
+
+def test_list_model_details(fake_kiro):
+    bin_path, write, _ = fake_kiro
+    write({"models": ["auto", "gpt-5.6-sol"]})
+    details = list_model_details(bin_path, {"KIRO_API_KEY": API_KEY})
+    assert [d["model_id"] for d in details] == ["auto", "gpt-5.6-sol"]
+    assert set(details[0]) == {"model_id", "description", "rate_multiplier", "context_window_tokens"}
+    assert list_models(bin_path, {"KIRO_API_KEY": API_KEY}) == ["auto", "gpt-5.6-sol"]
 
 
 def test_preflight_secret_missing(harness):

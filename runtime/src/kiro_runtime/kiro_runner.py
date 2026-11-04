@@ -251,8 +251,11 @@ class KiroRunner:
             proc.wait()
 
 
-def list_models(kiro_bin: str, env: Mapping[str, str], timeout: float = 120) -> list[str]:
-    """Return the model IDs available to the API key in `env`."""
+MODEL_DETAIL_FIELDS = ("model_id", "description", "rate_multiplier", "context_window_tokens")
+
+
+def list_model_details(kiro_bin: str, env: Mapping[str, str], timeout: float = 120) -> list[dict[str, Any]]:
+    """Return the models available to the API key in `env`: id, description, rate, context size."""
     out = subprocess.run(
         [kiro_bin, "chat", "--list-models", "-f", "json"],
         env={**os.environ, **env},
@@ -268,4 +271,13 @@ def list_models(kiro_bin: str, env: Mapping[str, str], timeout: float = 120) -> 
             raise PermissionError("kiro-cli authentication failed")
         raise RuntimeError(f"kiro-cli --list-models exited with {out.returncode}")
     data = json.loads(out.stdout)
-    return [m["model_id"] for m in data.get("models", []) if isinstance(m, dict) and "model_id" in m]
+    return [
+        {k: m.get(k) for k in MODEL_DETAIL_FIELDS}
+        for m in data.get("models", [])
+        if isinstance(m, dict) and isinstance(m.get("model_id"), str)
+    ]
+
+
+def list_models(kiro_bin: str, env: Mapping[str, str], timeout: float = 120) -> list[str]:
+    """Return the model IDs available to the API key in `env`."""
+    return [m["model_id"] for m in list_model_details(kiro_bin, env, timeout)]

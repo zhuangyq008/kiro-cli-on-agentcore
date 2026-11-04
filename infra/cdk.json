@@ -5,8 +5,8 @@
     "exclude": ["README.md", "cdk*.json", "**/*.d.ts", "**/*.js", "tsconfig.json", "package*.json", "node_modules", "test"]
   },
   "context": {
-    "defaultModel": "claude-sonnet-5.5",
-    "allowedModels": ["auto", "claude-sonnet-5.5", "claude-opus-5.5", "claude-haiku-5.5"],
+    "defaultModel": ["claude-sonnet-5.5", "gpt-5.6-terra", "auto"],
+    "allowedModels": ["auto", "claude-*", "gpt-*"],
     "defaultEffort": "high",
     "allowedEfforts": ["low", "medium", "high", "xhigh", "max"],
     "defaultMaxIterations": 3,

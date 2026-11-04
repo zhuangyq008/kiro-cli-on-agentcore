@@ -15,7 +15,9 @@ ARGS=(
   -c "kiroApiKeySecretName=${KIRO_API_KEY_SECRET_NAME}"
   -c "gitCredentialsSecretName=${GIT_CREDENTIALS_SECRET_NAME}"
 )
+# Model settings: comma-separated; DEFAULT_MODEL is an ordered preference list.
 [[ -n "${DEFAULT_MODEL:-}" ]] && ARGS+=(-c "defaultModel=${DEFAULT_MODEL}")
+[[ -n "${ALLOWED_MODELS:-}" ]] && ARGS+=(-c "allowedModels=${ALLOWED_MODELS}")
 [[ -n "${COGNITO_DOMAIN_PREFIX:-}" ]] && ARGS+=(-c "cognitoDomainPrefix=${COGNITO_DOMAIN_PREFIX}")
 
 echo "==> cdk deploy ${APP_STACK_NAME}"

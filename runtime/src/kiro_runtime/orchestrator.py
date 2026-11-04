@@ -5,6 +5,7 @@ Phase order, fallback targets and iteration counting are enforced here, not by t
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from typing import Any
 from . import phases, report
 from .events import emit_metrics
 from .kiro_runner import KiroRunner, RunResult
+from .models import allowed_available, resolve_default
 from .redact import Redactor
 from .schemas import (
     Execution,
@@ -52,7 +54,8 @@ class TaskSpec:
     prompt: str
     context: str
     acceptance_criteria: list[str]
-    model: str
+    # None means "use the configured default"; resolved against the API key's models at preflight.
+    model: str | None
     effort: str
     max_iterations: int
     timeout_seconds: int
@@ -186,6 +189,28 @@ class Orchestrator:
             except Exception:
                 logger.exception("heartbeat failed")
 
+    def _select_model(self, available: list[str]) -> None:
+        """Check the requested model, or pick the first available default, and record it."""
+        usable = ", ".join(allowed_available(available, self.cfg.allowed_models)[:30]) or "none"
+        if self.spec.model is not None:
+            if self.spec.model not in available:
+                raise PhaseFailure(
+                    "MODEL_UNAVAILABLE",
+                    f"model {self.spec.model!r} is not available to the configured API key; "
+                    f"available: {usable}",
+                )
+            return
+        chosen = resolve_default(self.cfg.default_models, available, self.cfg.allowed_models)
+        if chosen is None:
+            raise PhaseFailure(
+                "MODEL_UNAVAILABLE",
+                f"none of the default models ({', '.join(self.cfg.default_models)}) is available to the "
+                f"configured API key; available: {usable}",
+            )
+        self.spec = dataclasses.replace(self.spec, model=chosen)
+        self.d.store.set_fields(self.spec.task_id, {"model": chosen})
+        self._log("task.model_selected", model=chosen)
+
     def _preflight(self) -> None:
         self.d.store.set_phase(self.spec.task_id, "PREFLIGHT", 0)
         try:
@@ -200,10 +225,7 @@ class Orchestrator:
             raise PhaseFailure("KIRO_AUTH_FAILED", "Kiro API key was rejected") from e
         except Exception as e:
             raise PhaseFailure("MODEL_LIST_FAILED", f"could not list models: {type(e).__name__}") from e
-        if self.spec.model not in models:
-            raise PhaseFailure(
-                "MODEL_UNAVAILABLE", f"model {self.spec.model!r} is not available to the configured API key"
-            )
+        self._select_model(models)
         self.ws.init()
         self.ws.write_json(
             "input.json",
@@ -549,7 +571,7 @@ class Orchestrator:
                 "TaskIterations": (self.state.iteration, "Count"),
                 "TaskCredits": (round(self.state.credits, 4), "None"),
             },
-            {"Model": self.spec.model},
+            {"Model": self.spec.model or "unresolved"},
         )
         self._log("task.end", status=status, error_code=self.error_code, credits=round(self.state.credits, 4))
 

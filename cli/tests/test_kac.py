@@ -320,3 +320,98 @@ def test_progress_text():
     )
     assert progress({"status": "RUNNING", "phase": "PLAN"}) == "RUNNING  PLAN"
     assert progress({"status": "SUCCEEDED", "phase": "FINALIZE"}) == "SUCCEEDED"
+
+
+# models and in-body errors --------------------------------------------------
+
+MODELS = {
+    "models": [
+        {"model_id": "auto", "description": "router", "rate_multiplier": 1.0, "allowed": True},
+        {"model_id": "gpt-5.6-sol", "description": "GPT 5.6 Sol", "rate_multiplier": 4.4, "allowed": True},
+        {
+            "model_id": "gpt-5.6-terra",
+            "description": "GPT 5.6 Terra",
+            "rate_multiplier": 2.2,
+            "allowed": True,
+        },
+        {"model_id": "deepseek-3.2", "description": "DeepSeek", "rate_multiplier": 0.25, "allowed": False},
+    ],
+    "default_model": "gpt-5.6-terra",
+    "default_preference": ["claude-sonnet-5.5", "gpt-5.6-terra", "auto"],
+    "allowed_patterns": ["auto", "claude-*", "gpt-*"],
+}
+
+
+def body_error(code, status, message="m"):
+    # The runtime returns errors with HTTP 200 (AgentCore would turn a 4xx into a generic 424).
+    return httpx.Response(200, json={"error": {"code": code, "http_status": status, "message": message}})
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "status, exc", [(400, RequestError), (409, RequestError), (401, auth.AuthError), (502, ServerError)]
+)
+def test_in_body_errors_map_by_http_status(isolated, status, exc):
+    respx.post(isolated.invoke_url).mock(return_value=body_error("SOME_CODE", status, "details here"))
+    with pytest.raises(exc) as e:
+        Client(isolated, "tok").submit({"prompt": "x"})
+    assert "details here" in str(e.value)
+
+
+@respx.mock
+def test_submit_shows_server_message_for_rejected_model(isolated):
+    write_tokens()
+    respx.post(isolated.invoke_url).mock(
+        return_value=body_error(
+            "VALIDATION_ERROR", 400, "model 'deepseek-3.2' is not allowed; allowed patterns: gpt-*"
+        )
+    )
+    r = runner.invoke(app, ["submit", "x", "--model", "deepseek-3.2"])
+    assert r.exit_code == 11
+    assert "VALIDATION_ERROR" in r.stderr and "allowed patterns: gpt-*" in r.stderr
+
+
+@respx.mock
+def test_models_command(isolated):
+    write_tokens()
+    route = respx.post(isolated.invoke_url).mock(return_value=httpx.Response(200, json=MODELS))
+    r = runner.invoke(app, ["models"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(route.calls[0].request.content) == {"action": "models"}
+    assert route.calls[0].request.headers["x-amzn-bedrock-agentcore-runtime-session-id"].startswith("kac-")
+    lines = r.stdout.splitlines()
+    default_line = next(line for line in lines if "gpt-5.6-terra" in line)
+    assert default_line.startswith("*") and "2.2x" in default_line
+    assert "deepseek-3.2" not in r.stdout  # hidden unless --all
+    assert "default: gpt-5.6-terra" in r.stdout
+
+    r = runner.invoke(app, ["models", "--all"])
+    assert "deepseek-3.2" in r.stdout and "not allowed" in r.stdout
+    r = runner.invoke(app, ["models", "--json"])
+    assert json.loads(r.stdout)["default_model"] == "gpt-5.6-terra"
+
+
+@respx.mock
+def test_models_command_without_usable_default(isolated):
+    write_tokens()
+    respx.post(isolated.invoke_url).mock(
+        return_value=httpx.Response(200, json={**MODELS, "default_model": None})
+    )
+    r = runner.invoke(app, ["models"])
+    assert r.exit_code == 0 and "no default model is available" in r.stdout
+
+
+def test_describe_shows_default_until_model_is_selected():
+    from kac.main import describe
+
+    assert "model: (default)" in describe({"task_id": "tsk_1", "status": "RUNNING", "phase": "PREFLIGHT"})
+    assert "model: gpt-5.6-sol" in describe({"task_id": "tsk_1", "status": "RUNNING", "model": "gpt-5.6-sol"})
+
+
+@respx.mock
+@pytest.mark.parametrize("status, exit_code", [(400, 11), (401, 10), (403, 10), (502, 12)])
+def test_models_command_error_exit_codes(isolated, status, exit_code):
+    write_tokens()
+    respx.post(isolated.invoke_url).mock(return_value=body_error("X", status, "why"))
+    r = runner.invoke(app, ["models"])
+    assert r.exit_code == exit_code and "why" in r.stderr

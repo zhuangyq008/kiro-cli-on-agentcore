@@ -17,7 +17,9 @@ from starlette.responses import JSONResponse
 
 from .config import Config
 from .identity import IdentityError, caller_from_headers
+from .models import is_allowed, is_valid_model_id, resolve_default
 from .orchestrator import Orchestrator, TaskSpec
+from .secrets import SecretError
 from .store import now_iso
 from .workspace import Workspace
 
@@ -28,6 +30,9 @@ MAX_CONTEXT_BYTES = 1024 * 1024
 MAX_CRITERIA = 50
 MAX_CRITERION_CHARS = 2000
 MIN_TIMEOUT_SECONDS = 60
+# `models` results are cached per microVM; listing runs kiro-cli and reads the API key secret.
+MODELS_CACHE_SECONDS = 300
+MODELS_LIST_TIMEOUT_SECONDS = 30
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -80,17 +85,35 @@ class SubmitRequest(BaseModel):
         return [c.strip() for c in v]
 
 
+class ModelsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["models"]
+
+
 def error(code: str, status: int, message: str) -> JSONResponse:
-    return JSONResponse(
-        {"error": {"code": code, "http_status": status, "message": message}}, status_code=status
-    )
+    """An error response. The intended status goes in the body; the HTTP status is always 200.
+
+    AgentCore Runtime replaces any non-2xx response from the container with a generic HTTP 424
+    ("Received error (400) from runtime"), so the caller would never see the code and message.
+    """
+    return JSONResponse({"error": {"code": code, "http_status": status, "message": message}}, status_code=200)
 
 
-def resolve(req: SubmitRequest, cfg: Config) -> tuple[str, str, int, int]:
-    """Apply defaults and enforce server-side limits. Raises ValueError with a user-facing message."""
-    model = req.model or cfg.default_model
-    if model not in cfg.allowed_models:
-        raise ValueError(f"model {model!r} is not allowed; allowed: {', '.join(cfg.allowed_models)}")
+def resolve(req: SubmitRequest, cfg: Config) -> tuple[str | None, str, int, int]:
+    """Apply defaults and enforce server-side limits. Raises ValueError with a user-facing message.
+
+    The model stays None when not requested: the default depends on which models the API key
+    offers, which is only known inside the task (preflight).
+    """
+    model = req.model
+    if model is not None:
+        if not is_valid_model_id(model):
+            raise ValueError(f"model {model!r} is not a valid model ID; run `kac models` to list them")
+        if not is_allowed(model, cfg.allowed_models):
+            raise ValueError(
+                f"model {model!r} is not allowed; allowed patterns: {', '.join(cfg.allowed_models)}"
+            )
     effort = req.effort or cfg.default_effort
     if effort not in cfg.allowed_efforts:
         raise ValueError(f"effort {effort!r} is not allowed; allowed: {', '.join(cfg.allowed_efforts)}")
@@ -112,6 +135,18 @@ class Services:
     store: Any
     make_orchestrator: Callable[[TaskSpec], Orchestrator]
     workspace: Workspace
+    # Models offered by the configured Kiro API key (reads the secret, runs kiro-cli --list-models).
+    list_model_details: Callable[[], list[dict[str, Any]]]
+
+
+def models_response(cfg: Config, details: list[dict[str, Any]]) -> dict[str, Any]:
+    ids = [d["model_id"] for d in details]
+    return {
+        "models": [{**d, "allowed": is_allowed(d["model_id"], cfg.allowed_models)} for d in details],
+        "default_model": resolve_default(cfg.default_models, ids, cfg.allowed_models),
+        "default_preference": list(cfg.default_models),
+        "allowed_patterns": list(cfg.allowed_models),
+    }
 
 
 def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
@@ -130,10 +165,48 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
             with lock:
                 state["running"] = False
 
+    models_lock = threading.Lock()
+    models_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+    def cached_model_details() -> list[dict[str, Any]]:
+        # One kiro-cli at a time: concurrent callers wait and then share the cached result.
+        with models_lock:
+            hit = models_cache.get("details")
+            if hit and time.monotonic() - hit[0] < MODELS_CACHE_SECONDS:
+                return hit[1]
+            details = services.list_model_details()
+            models_cache["details"] = (time.monotonic(), details)
+            return details
+
+    def list_models(payload: dict[str, Any], context: Any) -> Any:
+        try:
+            caller_from_headers(getattr(context, "request_headers", None))
+        except IdentityError as e:
+            return error("UNAUTHORIZED", 401, str(e))
+        try:
+            ModelsRequest.model_validate(payload)
+        except ValidationError as e:
+            first = e.errors()[0]
+            return error("VALIDATION_ERROR", 400, f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}")
+        try:
+            details = cached_model_details()
+        except SecretError:
+            # The detail may describe the secret's structure; keep it in the logs only.
+            logger.exception("failed to read the Kiro API key secret for models")
+            return error("SECRET_UNAVAILABLE", 502, "could not read the Kiro API key secret")
+        except PermissionError:
+            return error("KIRO_AUTH_FAILED", 502, "Kiro API key was rejected")
+        except Exception as e:
+            logger.exception("failed to list models")
+            return error("MODEL_LIST_FAILED", 502, f"could not list models: {type(e).__name__}")
+        return models_response(cfg, details)
+
     @app.entrypoint
     def invoke(payload: Any, context: Any) -> Any:
         if not isinstance(payload, dict):
             return error("VALIDATION_ERROR", 400, "request body must be a JSON object")
+        if payload.get("action") == "models":
+            return list_models(payload, context)
         try:
             req = SubmitRequest.model_validate(payload)
         except ValidationError as e:
@@ -213,7 +286,7 @@ def build_default_app() -> BedrockAgentCoreApp:
 
     from .artifacts import ArtifactUploader
     from .events import emit_metrics, publish_completed
-    from .kiro_runner import KiroRunner, list_models
+    from .kiro_runner import KiroRunner, list_model_details, list_models
     from .orchestrator import Deps
     from .redact import Redactor
     from .secrets import load_secrets
@@ -247,6 +320,15 @@ def build_default_app() -> BedrockAgentCoreApp:
         )
         return Orchestrator(spec, cfg, ws, deps)
 
-    services = Services(store=store, make_orchestrator=make_orchestrator, workspace=ws)
+    def key_models() -> list[dict[str, Any]]:
+        # Only the API key is needed; Git credentials are not read for listing models.
+        secrets = load_secrets(sm, cfg.kiro_api_key_secret_name, None)
+        return list_model_details(
+            cfg.kiro_bin, {"KIRO_API_KEY": secrets.kiro_api_key}, timeout=MODELS_LIST_TIMEOUT_SECONDS
+        )
+
+    services = Services(
+        store=store, make_orchestrator=make_orchestrator, workspace=ws, list_model_details=key_models
+    )
     emit_metrics({"RuntimeStarted": (1, "Count")}, {"Service": "kiro-agentcore"})
     return create_app(cfg, services)

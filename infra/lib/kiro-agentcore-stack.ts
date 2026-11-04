@@ -16,9 +16,12 @@ import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as schedulerTargets from 'aws-cdk-lib/aws-scheduler-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+import { validateModelConfig } from './model-config';
 
 export interface KiroAgentCoreConfig {
-  readonly defaultModel: string;
+  /** Ordered preference: a task without a model uses the first one the Kiro API key offers. */
+  readonly defaultModels: string[];
+  /** Exact model IDs or `*` / `?` patterns, e.g. `gpt-*`. */
   readonly allowedModels: string[];
   readonly defaultEffort: string;
   readonly allowedEfforts: string[];
@@ -51,6 +54,7 @@ export class KiroAgentCoreStack extends Stack {
   constructor(scope: Construct, id: string, props: KiroAgentCoreStackProps) {
     super(scope, id, props);
     const cfg = props.config;
+    validateModelConfig(cfg.defaultModels, cfg.allowedModels);
     const repoRoot = path.join(__dirname, '..', '..');
 
     // ---------------------------------------------------------------- Cognito
@@ -164,7 +168,7 @@ export class KiroAgentCoreStack extends Stack {
       },
       tracingEnabled: true,
       environmentVariables: {
-        DEFAULT_MODEL: cfg.defaultModel,
+        DEFAULT_MODEL: cfg.defaultModels.join(','),
         ALLOWED_MODELS: cfg.allowedModels.join(','),
         DEFAULT_EFFORT: cfg.defaultEffort,
         ALLOWED_EFFORTS: cfg.allowedEfforts.join(','),
@@ -304,6 +308,9 @@ export class KiroAgentCoreStack extends Stack {
     // ----------------------------------------------------------------- Outputs
     const out = (name: string, value: string) => new CfnOutput(this, name, { value });
     out('RuntimeArn', runtime.agentRuntimeArn);
+    // Read back by install.sh so an upgrade keeps the model settings chosen at install time.
+    out('DefaultModels', cfg.defaultModels.join(','));
+    out('AllowedModels', cfg.allowedModels.join(','));
     out('RuntimeLogGroupName', runtimeLogGroupName);
     out('QueryApiUrl', api.apiEndpoint);
     out('UserPoolId', userPool.userPoolId);

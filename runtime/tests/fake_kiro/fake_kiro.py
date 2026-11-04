@@ -44,7 +44,22 @@ def main():
         if scenario.get("list_models_exit", 0):
             sys.stderr.write(scenario.get("list_models_stderr", "error\n"))
             sys.exit(scenario["list_models_exit"])
-        emit({"models": [{"model_id": m, "model_name": m} for m in scenario.get("models", [])]})
+        emit(
+            {
+                "models": [
+                    {
+                        "model_name": m,
+                        "model_id": m,
+                        "description": f"{m} model",
+                        "context_window_tokens": 1000000,
+                        "rate_multiplier": 1.0,
+                        "rate_unit": "Credit",
+                    }
+                    for m in scenario.get("models", [])
+                ],
+                "default_model": "auto",
+            }
+        )
         return
 
     agent = args[args.index("--agent") + 1]

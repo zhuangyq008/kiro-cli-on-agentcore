@@ -7,10 +7,12 @@
 #
 # The three scenarios run in parallel; each uses its own AgentCore session.
 #
-# Usage: scripts/smoke_test.sh [--model claude-sonnet-5.5] [--keep]
+# Usage: scripts/smoke_test.sh [--model <model-id>] [--keep]
+#   Without --model the tasks use the server's default, i.e. the first preferred model the Kiro API
+#   key offers, so the test also works for keys without Claude access.
 set -euo pipefail
 
-MODEL="claude-sonnet-5.5"
+MODEL=""
 KEEP=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,7 +30,8 @@ pass() { printf 'PASS %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf 'FAIL %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 submit() {
-  kac submit "$@" --model "$MODEL" --effort low --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+  kac submit "$@" ${MODEL:+--model "$MODEL"} --effort low --json \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
 }
 
 # Waits in the background and records the exit code of `kac wait` in $WORK/<task>.code
@@ -37,6 +40,20 @@ wait_bg() {
   ( code=0; kac wait "$task" --interval 20 >"$WORK/$task.status" 2>"$WORK/$task.progress" || code=$?
     echo "$code" >"$WORK/$task.code" ) &
 }
+
+echo "== models"
+models_json="$(kac models --json)"
+default_model="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("default_model") or "")' <<<"$models_json")"
+if [[ -n "$MODEL" ]]; then
+  echo "   using --model $MODEL"
+elif [[ -n "$default_model" ]]; then
+  echo "   server default for this API key: $default_model"
+else
+  echo "FAIL none of the default models is available to the Kiro API key:" >&2
+  kac models --all >&2 || true
+  echo "SMOKE SUMMARY passed=0 failed=1"
+  exit 1
+fi
 
 echo "== submitting"
 t1="$(submit "What is 17 multiplied by 3? Write only the number into a file named answer.txt in the directory given by the ARTIFACTS_DIR environment variable." \
@@ -59,6 +76,7 @@ for t in "$t1" "$t2" "$t3"; do
 done
 
 echo "== checks"
+pass "models listed (default: ${default_model:-none})"
 [[ "$(code_of "$t1")" == 0 ]] && pass "scenario 1 succeeded" || fail "scenario 1 exit code $(code_of "$t1")"
 kac result "$t1" --out "$WORK/$t1" >/dev/null
 [[ "$(tr -d '[:space:]' < "$WORK/$t1/artifacts/answer.txt" 2>/dev/null)" == "51" ]] \

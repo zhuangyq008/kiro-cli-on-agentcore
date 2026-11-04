@@ -66,7 +66,7 @@ kac submit "修复登录页的表单校验 bug，并提交 PR" \
   --context "仓库: https://github.com/org/web, 分支: main" \
   --ac "npm test 全部通过" \
   --ac "新增覆盖该 bug 的单元测试" \
-  --model claude-opus-5.5 --effort high --max-iterations 3 --timeout 7200
+  --model gpt-5.6-sol --effort high --max-iterations 3 --timeout 7200
 ```
 
 | 参数 | 说明 |
@@ -74,12 +74,43 @@ kac submit "修复登录页的表单校验 bug，并提交 PR" \
 | `PROMPT` | 任务描述；传 `-` 时从 stdin 读取 |
 | `--context` / `--context-file` | 附加上下文，例如仓库、分支、背景说明 |
 | `--ac`（可重复）/ `--ac-file`（每行一条） | 验收标准。会原样保留，编号为 `U-1`、`U-2`……，是验证阶段的判定依据。不提供时由 agent 自行推导 |
-| `--model` | 不指定时用服务端默认模型（`claude-sonnet-5.5`） |
+| `--model` | 模型 ID，用 `kac models` 查看可选值。不指定时用服务端默认：按优先级列表取第一个 API key 可用的模型（默认 `claude-sonnet-5.5` → `gpt-5.6-terra` → `auto`） |
 | `--effort` | low / medium / high / xhigh / max |
 | `--max-iterations` | 最多几轮“执行 + 验证”，默认 3 |
 | `--timeout` | 整个任务的超时秒数，覆盖所有阶段 |
 
 命令输出 task_id。每次提交都使用一个新的 Session，不支持在已有 Session 中追问。
+
+## 查看可用模型
+
+```bash
+kac models         # 服务的 Kiro API key 可用、且服务端允许的模型；* 标记默认模型
+kac models --all   # 同时列出不被允许的模型
+```
+
+输出示例：
+
+```
+  auto                     1x  Models chosen by task for optimal usage and consistent quality
+* claude-sonnet-5.5      1.3x  Claude Sonnet 5.5 model with 1M context window
+  gpt-5.6-sol            4.4x  OpenAI GPT 5.6 Sol with 1M context window
+  gpt-5.6-terra          2.2x  OpenAI GPT 5.6 Terra with 1M context window
+  gpt-5.6-luna           0.6x  OpenAI GPT 5.6 Luna with 1M context window
+
+default: claude-sonnet-5.5  (marked *, used when --model is not given)
+```
+
+倍数是 Kiro credits 的费率，直接影响成本。模型名写错或不被允许时，`kac submit` 会立即报错并给出原因（退出码 11）。
+
+结果在每个 microVM 内缓存 5 分钟。
+
+**不通过 kac、直接调用 Runtime 时**：业务错误的 HTTP 状态码也是 200，错误放在响应体的 `error` 字段里，原本的状态码在 `error.http_status` 中（AgentCore 会把容器返回的非 2xx 响应替换成不带信息的 424）。判断是否成功要检查有没有 `error` 字段：
+
+```json
+{ "error": { "code": "VALIDATION_ERROR", "http_status": 400, "message": "model 'x' is not allowed; allowed patterns: auto, claude-*, gpt-*" } }
+```
+
+token 缺失或无效仍由 AgentCore 直接返回 401 / 403，请求不会到达容器。
 
 ## 查看与等待
 
@@ -124,7 +155,7 @@ kac result tsk_01J... --out ./result
 |---|---|
 | `VERIFICATION_NOT_PASSED` | INCOMPLETE 时，列出仍未通过的标准 |
 | `PHASE_OUTPUT_INVALID` | 某阶段两次都没有产出合规的交接文件 |
-| `MODEL_UNAVAILABLE` | 当前 API key 不能使用所选模型 |
+| `MODEL_UNAVAILABLE` | 当前 API key 不能使用所选模型，或默认优先级列表中没有可用的模型；错误信息列出可用的模型 |
 | `KIRO_AUTH_FAILED` | Kiro API key 无效 |
 | `SECRET_UNAVAILABLE` | 读取 secret 失败 |
 | `SESSION_LOST` | microVM 被回收，由 Sweeper 标记 |

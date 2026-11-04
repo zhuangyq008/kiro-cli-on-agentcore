@@ -7,9 +7,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from .models import is_allowed, is_valid_model_id, is_valid_pattern
+
 # AgentCore Runtime sessions live at most 8 hours.
 SESSION_MAX_LIFETIME_SECONDS = 28800
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Ordered preference: the first one the API key offers is used when a task names no model.
+DEFAULT_MODELS = "claude-sonnet-5.5,gpt-5.6-terra,auto"
+# Exact IDs or `*` / `?` patterns.
+ALLOWED_MODELS = "auto,claude-*,gpt-*"
 
 
 class ConfigError(ValueError):
@@ -35,7 +41,7 @@ def _int(env: Mapping[str, str], name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Config:
-    default_model: str
+    default_models: tuple[str, ...]
     allowed_models: tuple[str, ...]
     default_effort: str
     allowed_efforts: tuple[str, ...]
@@ -69,10 +75,8 @@ class Config:
         if git_secret.upper() == "NONE":  # explicit opt-out (empty values are awkward in some APIs)
             git_secret = ""
         cfg = cls(
-            default_model=env.get("DEFAULT_MODEL", "claude-sonnet-5.5").strip(),
-            allowed_models=_csv(
-                env.get("ALLOWED_MODELS", "auto,claude-sonnet-5.5,claude-opus-5.5,claude-haiku-5.5")
-            ),
+            default_models=_csv(env.get("DEFAULT_MODEL", DEFAULT_MODELS)),
+            allowed_models=_csv(env.get("ALLOWED_MODELS", ALLOWED_MODELS)),
             default_effort=env.get("DEFAULT_EFFORT", "high").strip(),
             allowed_efforts=_csv(env.get("ALLOWED_EFFORTS", ",".join(EFFORT_LEVELS))),
             default_max_iterations=_int(env, "DEFAULT_MAX_ITERATIONS", 3),
@@ -97,8 +101,16 @@ class Config:
     def validate(self) -> None:
         if not self.allowed_models:
             raise ConfigError("ALLOWED_MODELS must not be empty")
-        if self.default_model not in self.allowed_models:
-            raise ConfigError(f"DEFAULT_MODEL {self.default_model!r} is not in ALLOWED_MODELS")
+        bad = [p for p in self.allowed_models if not is_valid_pattern(p)]
+        if bad:
+            raise ConfigError(f"ALLOWED_MODELS has invalid entries: {bad}")
+        if not self.default_models:
+            raise ConfigError("DEFAULT_MODEL must list at least one model")
+        for model in self.default_models:
+            if not is_valid_model_id(model):
+                raise ConfigError(f"DEFAULT_MODEL entry {model!r} is not a valid model ID")
+            if not is_allowed(model, self.allowed_models):
+                raise ConfigError(f"DEFAULT_MODEL entry {model!r} is not permitted by ALLOWED_MODELS")
         unknown = [e for e in self.allowed_efforts if e not in EFFORT_LEVELS]
         if unknown or not self.allowed_efforts:
             raise ConfigError(f"ALLOWED_EFFORTS must be a non-empty subset of {EFFORT_LEVELS}")

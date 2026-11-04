@@ -44,6 +44,7 @@ cd infra && npm ci && npx cdk deploy       # 部署到 us-east-1
 cd ../cli && uv tool install --python 3.12 '.[aws]'   # 安装 kac
 kac configure --from-stack KiroAgentCoreStack
 kac login
+kac models                                 # 查看可用模型（Claude、GPT 等，取决于 Kiro API key）
 kac submit "修复 issue #12 并提 PR" --context "仓库: https://github.com/org/repo" --ac "所有现有测试通过"
 kac wait <task_id> && kac result <task_id>
 ```

@@ -12,6 +12,10 @@
 #   --skip-user      不创建登录用户
 #   --smoke-only     只重新运行冒烟测试
 #   --no-kac         不在本机安装 kac 命令行
+#   --default-model LIST   默认模型的优先级列表，逗号分隔，例如 gpt-5.6-terra,auto
+#                          （任务未指定模型时，用第一个 Kiro API key 可用的模型）
+#   --allowed-models LIST  允许使用的模型，逗号分隔，可用通配符，例如 'gpt-*,auto' 或 '*'
+#                          两项都不指定时：首次安装用默认值，升级时沿用当前设置
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -32,6 +36,8 @@ EMAIL=""
 SKIP_USER=false
 SMOKE_ONLY=false
 INSTALL_KAC=true
+DEFAULT_MODEL_OPT=""
+ALLOWED_MODELS_OPT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --yes) ASSUME_YES=true; shift ;;
@@ -39,9 +45,24 @@ while [[ $# -gt 0 ]]; do
     --skip-user) SKIP_USER=true; shift ;;
     --smoke-only) SMOKE_ONLY=true; shift ;;
     --no-kac) INSTALL_KAC=false; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    --default-model|--allowed-models)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "$1 需要一个值（用 --help 查看用法）" >&2; exit 2; }
+      if [[ "$1" == "--default-model" ]]; then DEFAULT_MODEL_OPT="$2"; else ALLOWED_MODELS_OPT="$2"; fi
+      shift 2 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail/{/^set -euo/!p;}' "$0"; exit 0 ;;
     *) echo "未知参数：$1（用 --help 查看用法）" >&2; exit 2 ;;
   esac
+done
+# 模型列表只做字符检查；具体规则（默认模型必须在允许列表内等）由部署时的 CDK 校验。
+valid_model_list() {
+  [[ "$1" =~ ^[A-Za-z0-9*?._:,-]{1,500}$ && -n "${1//,/}" ]]
+}
+DEFAULT_MODEL_OPT="${DEFAULT_MODEL_OPT// /}"
+ALLOWED_MODELS_OPT="${ALLOWED_MODELS_OPT// /}"
+for opt in "$DEFAULT_MODEL_OPT" "$ALLOWED_MODELS_OPT"; do
+  if [[ -n "$opt" ]] && ! valid_model_list "$opt"; then
+    echo "模型参数只能包含字母、数字、. _ : - * ? 和逗号，且不能为空：$opt" >&2; exit 2
+  fi
 done
 
 # ------------------------------------------------------------------ 输出与输入
@@ -180,12 +201,17 @@ start_build() {  # start_build MODE SOURCE_LOCATION
   local env_json
   env_json="$(python3 -c '
 import json, sys
-mode, api, git = sys.argv[1:4]
-print(json.dumps([
+mode, api, git, default_model, allowed_models = sys.argv[1:6]
+env = [
   {"name": "MODE", "value": mode, "type": "PLAINTEXT"},
   {"name": "KIRO_API_KEY_SECRET_NAME", "value": api, "type": "PLAINTEXT"},
   {"name": "GIT_CREDENTIALS_SECRET_NAME", "value": git, "type": "PLAINTEXT"},
-]))' "$1" "$API_KEY_SECRET" "${GIT_SECRET_EFFECTIVE:-NONE}")"
+]
+for name, value in (("DEFAULT_MODEL", default_model), ("ALLOWED_MODELS", allowed_models)):
+  if value:
+    env.append({"name": name, "value": value, "type": "PLAINTEXT"})
+print(json.dumps(env))' "$1" "$API_KEY_SECRET" "${GIT_SECRET_EFFECTIVE:-NONE}" \
+    "${DEFAULT_MODEL_OPT:-}" "${ALLOWED_MODELS_OPT:-}")"
   aws codebuild start-build --project-name "$PROJECT" --source-type-override S3 \
     --source-location-override "$2" --environment-variables-override "$env_json" \
     --query 'build.id' --output text
@@ -357,7 +383,28 @@ else
   fi
   if [[ "$APP_STATUS" == *COMPLETE && "$APP_STATUS" != *ROLLBACK_COMPLETE ]]; then
     info "服务已经部署过，这次会用当前代码升级（未变化的部分不会重建）。"
+    # 升级时沿用当前的模型设置，除非这次用参数指定了新值。
+    CUR_DEFAULT="$(stack_output "$APP_STACK" DefaultModels 2>/dev/null || true)"
+    CUR_ALLOWED="$(stack_output "$APP_STACK" AllowedModels 2>/dev/null || true)"
+    for cur in "$CUR_DEFAULT" "$CUR_ALLOWED"; do
+      [[ -z "$cur" || "$cur" == "None" ]] || valid_model_list "$cur" \
+        || die "当前部署记录的模型设置无法识别：$cur" "请用 --default-model / --allowed-models 明确指定后重新运行。"
+    done
+    if [[ -z "$CUR_DEFAULT" || "$CUR_DEFAULT" == "None" ]]; then
+      if [[ -z "$DEFAULT_MODEL_OPT" || -z "$ALLOWED_MODELS_OPT" ]]; then
+        warn "当前部署来自旧版本，没有记录模型设置。未指定的项将使用新版本的默认值。"
+        info "新的允许列表 auto、claude-*、gpt-* 比旧版本宽（会包含 GPT 等模型）。"
+        info "如需保留旧的设置，请取消后用 --default-model / --allowed-models 重新运行。"
+        confirm "按新的默认值继续吗？" Y || die "已取消。"
+      fi
+    else
+      [[ -z "$DEFAULT_MODEL_OPT" ]] && DEFAULT_MODEL_OPT="$CUR_DEFAULT"
+      [[ -z "$ALLOWED_MODELS_OPT" && "$CUR_ALLOWED" != "None" ]] && ALLOWED_MODELS_OPT="$CUR_ALLOWED"
+    fi
   fi
+  info "默认模型（按顺序取第一个 Kiro API key 可用的）：${DEFAULT_MODEL_OPT:-claude-sonnet-5.5,gpt-5.6-terra,auto（默认）}"
+  info "允许使用的模型：${ALLOWED_MODELS_OPT:-auto,claude-*,gpt-*（默认）}"
+  info "可用 --default-model / --allowed-models 修改；部署后用 kac models 查看实际可用的模型。"
   confirm "开始部署吗？" Y || die "已取消。"
   info "正在打包并上传源码…"
   SRC="$(upload_source "$SOURCE_BUCKET")"
@@ -421,10 +468,10 @@ else
   SMOKE_ID="$(start_build smoke "$SRC")"
 fi
 if watch_build "$SMOKE_ID" "运行测试任务"; then
-  build_logs_grep "$SMOKE_ID" '?"PASS scenario" ?"PASS listed" ?FAIL ?"SMOKE SUMMARY"' | sed 's/^/    /'
+  build_logs_grep "$SMOKE_ID" '?"PASS models" ?"PASS scenario" ?"PASS listed" ?FAIL ?"SMOKE SUMMARY"' | sed 's/^/    /'
   ok "冒烟测试全部通过"
 else
-  build_logs_grep "$SMOKE_ID" '?"PASS scenario" ?"PASS listed" ?FAIL ?"SMOKE SUMMARY"' | sed 's/^/    /' || true
+  build_logs_grep "$SMOKE_ID" '?"PASS models" ?"PASS scenario" ?"PASS listed" ?FAIL ?"SMOKE SUMMARY"' | sed 's/^/    /' || true
   show_failure "$SMOKE_ID"
   info "只重跑测试：./install.sh --smoke-only"
   exit 1
