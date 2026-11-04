@@ -1,0 +1,21 @@
+version: 0.2
+
+# Runs in the installer's CodeBuild project (arm64, privileged for docker).
+# MODE=deploy: build the runtime image and `cdk deploy`.  MODE=smoke: run scripts/smoke_test.sh.
+env:
+  shell: bash
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+      python: 3.12
+  build:
+    commands:
+      - echo "MODE=${MODE}"
+      - |
+        if [ "${MODE}" = "smoke" ]; then
+          bash deploy/codebuild-smoke.sh
+        else
+          bash deploy/codebuild-deploy.sh
+        fi

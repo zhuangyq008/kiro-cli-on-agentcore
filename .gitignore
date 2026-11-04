@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / CDK
+node_modules/
+infra/cdk.out/
+infra/*.js
+infra/*.d.ts
+infra/bin/*.js
+infra/bin/*.d.ts
+infra/lib/*.js
+infra/lib/*.d.ts
+infra/test/*.js
+infra/test/*.d.ts
+!infra/jest.config.js
+
+# Local
+.DS_Store
+.env
+*.log
+
+# Downloaded task results (kac result)
+tsk_*/

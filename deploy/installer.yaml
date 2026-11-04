@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  kiro-cli on AgentCore - installer. A CodeBuild project that builds the arm64 runtime image and
+  runs `cdk deploy` and the smoke test, so the interactive installer can run from AWS CloudShell.
+  Kept after installation; re-run install.sh to upgrade.
+
+Parameters:
+  ApplicationStackName:
+    Type: String
+    Default: KiroAgentCoreStack
+    Description: Name of the application stack that this installer deploys.
+
+Resources:
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-source-bundles
+            Status: Enabled
+            ExpirationInDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  SourceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SourceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt SourceBucket.Arn
+              - !Sub "${SourceBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /aws/codebuild/kiro-agentcore-installer
+      RetentionInDays: 30
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: kiro-cli on AgentCore installer. Deploys only through the CDK bootstrap roles.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: installer
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${BuildLogGroup.Arn}:*"
+              - Sid: ReadSource
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "${SourceBucket.Arn}/*"
+              - Sid: UseCdkBootstrapRoles
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-*-${AWS::AccountId}-${AWS::Region}"
+              - Sid: CdkBootstrapVersion
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/hnb659fds/version"
+              - Sid: ReadAppStackOutputs
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ApplicationStackName}/*"
+              - Sid: SmokeTestMachineClientSecret
+                Effect: Allow
+                Action: cognito-idp:DescribeUserPoolClient
+                Resource: !Sub "arn:${AWS::Partition}:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*"
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: kiro-agentcore-installer
+      Description: Builds and deploys kiro-cli on AgentCore (MODE=deploy) or runs the smoke test (MODE=smoke).
+      ServiceRole: !GetAtt BuildRole.Arn
+      TimeoutInMinutes: 90
+      QueuedTimeoutInMinutes: 60
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: S3
+        Location: !Sub "${SourceBucket}/source/placeholder.zip"
+        BuildSpec: deploy/buildspec.yml
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: MODE
+            Value: deploy
+          - Name: APP_STACK_NAME
+            Value: !Ref ApplicationStackName
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref BuildLogGroup
+
+Outputs:
+  SourceBucketName:
+    Value: !Ref SourceBucket
+  ProjectName:
+    Value: !Ref BuildProject
+  LogGroupName:
+    Value: !Ref BuildLogGroup

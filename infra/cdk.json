@@ -1,0 +1,25 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "**/*.d.ts", "**/*.js", "tsconfig.json", "package*.json", "node_modules", "test"]
+  },
+  "context": {
+    "defaultModel": "claude-sonnet-5.5",
+    "allowedModels": ["auto", "claude-sonnet-5.5", "claude-opus-5.5", "claude-haiku-5.5"],
+    "defaultEffort": "high",
+    "allowedEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "defaultMaxIterations": 3,
+    "maxIterationsLimit": 5,
+    "defaultTimeoutSeconds": 7200,
+    "maxTimeoutSeconds": 27000,
+    "kiroApiKeySecretName": "prod/kiro/api-key",
+    "gitCredentialsSecretName": "prod/kiro/git-credentials",
+    "kiroCliVersion": "2.35.2",
+    "machineClientNames": [],
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true
+  }
+}

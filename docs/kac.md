@@ -1,0 +1,131 @@
+# kac 使用说明
+
+`kac` 是本服务的本地命令行客户端，用来提交任务、查询状态和下载结果。它只需要 Cognito token，不需要 AWS 凭证。唯一的例外是 `kac configure --from-stack`，它要读取 CloudFormation 输出，所以需要 AWS 凭证。
+
+## 安装
+
+```bash
+cd cli
+uv tool install --python 3.12 '.[aws]'      # 或：pipx install '.[aws]'
+```
+
+通过 CloudShell 安装向导部署时，向导已经在 CloudShell 中装好并配置了 kac。
+
+`[aws]` 会额外安装 boto3，只有 `configure --from-stack` 用得到它。
+
+## 配置
+
+```bash
+kac configure --from-stack KiroAgentCoreStack
+```
+
+配置写入 `~/.config/kac/config.toml`。每一项都可以用环境变量覆盖，优先级高于配置文件：
+
+| 配置项 | 环境变量 |
+|---|---|
+| `runtime_arn` | `KAC_RUNTIME_ARN` |
+| `query_api_url` | `KAC_QUERY_API_URL` |
+| `cognito_domain` | `KAC_COGNITO_DOMAIN` |
+| `client_id` | `KAC_CLIENT_ID` |
+| `scope` | `KAC_SCOPE`（默认 `kiro-agent/invoke`） |
+| `region` | `KAC_REGION`（默认 `us-east-1`） |
+
+`KAC_CONFIG_DIR` 可以改变配置目录。
+
+## 登录
+
+```bash
+kac login               # 打开浏览器登录，本地 8765 端口接收回调
+kac login --no-browser  # 只打印 URL，自己复制到浏览器打开
+kac login --paste       # 远程终端：登录后把浏览器地址栏的回调地址粘贴回来
+kac logout
+```
+
+在 AWS CloudShell 或 SSH 会话中，`kac login` 默认使用 `--paste` 模式。登录完成后浏览器会显示“无法访问此网站”，这是正常的，把地址栏里以 `http://localhost:8765/callback?code=` 开头的完整网址粘贴到终端即可。
+
+**在本机创建测试用户**（不发邮件，直接设永久密码）：
+
+```bash
+POOL=$(aws cloudformation describe-stacks --region us-east-1 --stack-name KiroAgentCoreStack \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
+aws cognito-idp admin-create-user --region us-east-1 --user-pool-id "$POOL" --username tester \
+  --message-action SUPPRESS --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true
+read -s -p "密码: " PW; echo
+aws cognito-idp admin-set-user-password --region us-east-1 --user-pool-id "$POOL" \
+  --username tester --password "$PW" --permanent; unset PW
+```
+
+token 保存在 `~/.config/kac/tokens.json`，文件权限为 0600。access token 过期后，kac 会自动用 refresh token 刷新，refresh token 有效期 30 天。
+
+**CI 场景**：设置 `KAC_CLIENT_ID`（取 `MachineClientId`）和 `KAC_CLIENT_SECRET` 后，kac 走 client_credentials 流程，不读写本地 token 文件。
+
+## 提交任务
+
+```bash
+kac submit "修复登录页的表单校验 bug，并提交 PR" \
+  --context "仓库: https://github.com/org/web, 分支: main" \
+  --ac "npm test 全部通过" \
+  --ac "新增覆盖该 bug 的单元测试" \
+  --model claude-opus-5.5 --effort high --max-iterations 3 --timeout 7200
+```
+
+| 参数 | 说明 |
+|---|---|
+| `PROMPT` | 任务描述；传 `-` 时从 stdin 读取 |
+| `--context` / `--context-file` | 附加上下文，例如仓库、分支、背景说明 |
+| `--ac`（可重复）/ `--ac-file`（每行一条） | 验收标准。会原样保留，编号为 `U-1`、`U-2`……，是验证阶段的判定依据。不提供时由 agent 自行推导 |
+| `--model` | 不指定时用服务端默认模型（`claude-sonnet-5.5`） |
+| `--effort` | low / medium / high / xhigh / max |
+| `--max-iterations` | 最多几轮“执行 + 验证”，默认 3 |
+| `--timeout` | 整个任务的超时秒数，覆盖所有阶段 |
+
+命令输出 task_id。每次提交都使用一个新的 Session，不支持在已有 Session 中追问。
+
+## 查看与等待
+
+```bash
+kac status tsk_01J...     # 状态、当前阶段和轮次、各阶段结果与耗时
+kac wait tsk_01J...       # 轮询到结束，阶段变化时打印一行
+kac list --limit 20       # 最近的任务
+```
+
+`kac wait` 的退出码可以直接用在脚本里：
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | SUCCEEDED：所有验收标准通过独立验证 |
+| 1 | FAILED：执行出错，见 `error_code` |
+| 2 | TIMED_OUT |
+| 3 | INCOMPLETE：达到最大轮数仍有标准未通过 |
+| 10 | 认证错误（需要 `kac login`） |
+| 11 | 请求被拒绝（参数错误、任务不存在等） |
+| 12 | 服务端或网络错误 |
+
+所有命令都支持 `--json` 输出。
+
+## 下载结果
+
+```bash
+kac result tsk_01J... --out ./result
+```
+
+| 文件 | 内容 |
+|---|---|
+| `output.md` | 最终报告：结论、需求理解、每条验收标准的结果和证据、假设及修改历史、各轮验证结论、执行摘要 |
+| `result.json` | 机器可读的结果 |
+| `loop/` | 闭环过程文件：`requirements.*`、`plan.*`、`iterations/<n>/execution.*`、`iterations/<n>/verify.*`、`feedback.json`、`assumption_history.json` |
+| `artifacts/` | agent 写到 `ARTIFACTS_DIR` 的交付物 |
+
+产物和任务记录在 90 天后自动删除。
+
+## 常见错误码
+
+| error_code | 含义 |
+|---|---|
+| `VERIFICATION_NOT_PASSED` | INCOMPLETE 时，列出仍未通过的标准 |
+| `PHASE_OUTPUT_INVALID` | 某阶段两次都没有产出合规的交接文件 |
+| `MODEL_UNAVAILABLE` | 当前 API key 不能使用所选模型 |
+| `KIRO_AUTH_FAILED` | Kiro API key 无效 |
+| `SECRET_UNAVAILABLE` | 读取 secret 失败 |
+| `SESSION_LOST` | microVM 被回收，由 Sweeper 标记 |
+| `TASK_TIMEOUT` | 超时 |
