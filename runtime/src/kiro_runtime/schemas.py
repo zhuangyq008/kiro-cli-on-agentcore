@@ -100,11 +100,11 @@ class Verify(_Model):
 def load_model[M: BaseModel](path: Path, model: type[M]) -> tuple[M | None, list[str]]:
     """Read and validate a JSON hand-off file. Returns (object, errors)."""
     if not path.is_file():
-        return None, [f"required file {path} was not written"]
+        return None, [f"no JSON object was found in your reply (expected the {path.name} document)"]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        return None, [f"{path} is not valid JSON: {e}"]
+        return None, [f"the JSON for {path.name} is not valid: {e}"]
     try:
         return model.model_validate(data), []
     except ValidationError as e:
@@ -125,8 +125,18 @@ def _duplicates(ids: list[str]) -> list[str]:
     return dup
 
 
+# The phase prompt asks for at most three; a little leeway avoids retries for one extra criterion.
+MAX_DERIVED_CRITERIA = 5
+
+
 def check_requirements(req: Requirements, user_criteria: list[str]) -> list[str]:
     errors: list[str] = []
+    derived = [c for c in req.acceptance_criteria if not c.id.startswith("U-")]
+    if len(derived) > MAX_DERIVED_CRITERIA:
+        errors.append(
+            f"requirements.json: at most {MAX_DERIVED_CRITERIA} derived criteria (D-n) are allowed, found "
+            f"{len(derived)}; keep only those the goal needs"
+        )
     ids = [c.id for c in req.acceptance_criteria]
     for d in _duplicates(ids):
         errors.append(f"requirements.json: duplicate acceptance criterion id {d}")

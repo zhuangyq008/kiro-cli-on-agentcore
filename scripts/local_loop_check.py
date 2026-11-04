@@ -77,6 +77,23 @@ class LocalUploader:
         return []
 
 
+def _criteria() -> list[str]:
+    raw = os.environ.get("CHECK_CRITERIA")
+    if not raw:
+        return ["Running `python -m pytest -q` in /workspace/work/calc passes with at least one test"]
+    value = json.loads(raw)
+    if not isinstance(value, list) or not all(isinstance(c, str) and c.strip() for c in value):
+        raise SystemExit("CHECK_CRITERIA must be a JSON list of non-empty strings")
+    return value
+
+
+def _seconds(entry: dict) -> float:
+    import datetime as dt
+
+    fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
+    return (dt.datetime.strptime(entry["ended_at"], fmt) - dt.datetime.strptime(entry["started_at"], fmt)).total_seconds()
+
+
 def main() -> int:
     setup_logging()
     api_key = os.environ.get("KIRO_API_KEY")
@@ -95,7 +112,7 @@ def main() -> int:
             "/workspace/work/calc and commit both files.",
         ),
         context="",
-        acceptance_criteria=["Running `python -m pytest -q` in /workspace/work/calc passes with at least one test"],
+        acceptance_criteria=_criteria(),
         # Unset: the orchestrator picks the first default model the API key offers.
         model=os.environ.get("CHECK_MODEL") or None,
         effort=os.environ.get("CHECK_EFFORT", "low"),
@@ -118,6 +135,9 @@ def main() -> int:
     status = Orchestrator(spec, cfg, ws, deps).run()
     (OUT / "task.json").write_text(json.dumps(store.item, indent=2, default=str))
     print(f"[result] status={status} credits={store.item['credits_used']:.3f}", flush=True)
+    for h in store.item.get("phase_history", []):
+        print(f"[timing] {h['phase']:<10} iter={h.get('iteration')} attempt={h.get('attempt')} "
+              f"outcome={h.get('outcome')} {_seconds(h):.1f}s", flush=True)
     return 0 if status == "SUCCEEDED" else 1
 
 

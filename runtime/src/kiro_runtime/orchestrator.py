@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import kiro_config, phases, report
+from . import kiro_config, phases, render, report
 from .events import emit_metrics
 from .kiro_runner import KiroRunner, RunResult, child_env
 from .models import allowed_available, resolve_default
@@ -112,18 +112,19 @@ class LoopState:
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
-def _json_from_text(text: str) -> Any | None:
-    """Best-effort extraction of a JSON object from a final reply."""
-    candidates = [m.group(1) for m in _JSON_BLOCK.finditer(text or "")]
+def _json_candidates(text: str) -> list[Any]:
+    """JSON objects in a final reply, last first (the answer usually comes last)."""
+    raw = [m.group(1) for m in _JSON_BLOCK.finditer(text or "")]
     stripped = (text or "").strip()
     if stripped.startswith("{") and stripped.endswith("}"):
-        candidates.append(stripped)
-    for c in reversed(candidates):
+        raw.append(stripped)
+    found = []
+    for c in reversed(raw):
         try:
-            return json.loads(c)
+            found.append(json.loads(c))
         except json.JSONDecodeError:
             continue
-    return None
+    return found
 
 
 class Orchestrator:
@@ -468,11 +469,7 @@ class Orchestrator:
                 self._record(entry, "timed_out")
                 raise TaskTimeout()
 
-            if not out.json.exists():
-                recovered = _json_from_text(res.final_text)
-                if recovered is not None:
-                    out.json.write_text(json.dumps(recovered, ensure_ascii=False, indent=2), encoding="utf-8")
-            obj, errors = validate()
+            obj, errors = self._take_answer(out.json, res.final_text, validate)
             errors = extra_errors + errors
             if res.exit_code != 0:
                 detail = f": {res.run_error}" if res.run_error else ""
@@ -482,6 +479,8 @@ class Orchestrator:
             if not errors and phase == "VERIFY":
                 v = compute_verdict(obj)
                 outcome = "pass" if v.passed else f"fail:{v.next}"
+            if not errors and not out.markdown.exists():
+                out.markdown.write_text(render.markdown(phase, obj), encoding="utf-8")
             self._record(entry, outcome, errors)
             self._sync_loop()
             if not errors:
@@ -493,6 +492,25 @@ class Orchestrator:
         raise PhaseFailure(
             code, f"{phase} output rejected after {MAX_ATTEMPTS} attempts: " + "; ".join(errors[:5])
         )
+
+    @staticmethod
+    def _take_answer(
+        path: Path, final_text: str, validate: Callable[[], tuple[Any, list[str]]]
+    ) -> tuple[Any, list[str]]:
+        """Use a valid file the agent wrote, else the first JSON block in the reply that validates."""
+        if path.exists():
+            obj, errors = validate()
+            if not errors:
+                return obj, errors
+        candidates = _json_candidates(final_text)
+        for candidate in candidates:
+            path.write_text(json.dumps(candidate, ensure_ascii=False, indent=2), encoding="utf-8")
+            obj, errors = validate()
+            if not errors:
+                return obj, errors
+        if candidates:  # none is valid: report the errors of the most likely answer, the last block
+            path.write_text(json.dumps(candidates[0], ensure_ascii=False, indent=2), encoding="utf-8")
+        return validate()
 
     def _record(self, entry: dict[str, Any], outcome: str, errors: list[str] | None = None) -> None:
         entry = {**entry, "outcome": outcome}

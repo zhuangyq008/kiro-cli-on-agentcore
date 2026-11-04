@@ -275,7 +275,7 @@ def test_invalid_output_twice_fails(harness):
     assert orch.run() == "FAILED"
     assert agents() == ["understand", "understand"]
     item = store.get("tsk_1")
-    assert item["error_code"] == "PHASE_OUTPUT_INVALID" and "was not written" in item["error_message"]
+    assert item["error_code"] == "PHASE_OUTPUT_INVALID" and "no JSON object" in item["error_message"]
 
 
 def test_nonzero_exit_twice_fails_with_exit_code(harness):

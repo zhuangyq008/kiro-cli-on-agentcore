@@ -30,10 +30,10 @@ def req(criteria=None, assumptions=None):
 def test_load_model_errors(tmp_path):
     p = tmp_path / "x.json"
     obj, errors = load_model(p, Requirements)
-    assert obj is None and "was not written" in errors[0]
+    assert obj is None and "no JSON object" in errors[0]
     p.write_text("{not json")
     obj, errors = load_model(p, Requirements)
-    assert "not valid JSON" in errors[0]
+    assert "is not valid" in errors[0]
     p.write_text(json.dumps({"goal": "", "acceptance_criteria": []}))
     obj, errors = load_model(p, Requirements)
     assert obj is None and len(errors) >= 2

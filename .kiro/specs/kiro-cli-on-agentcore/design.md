@@ -168,20 +168,22 @@ stateDiagram-v2
 
 ### 各阶段约定
 
-| 阶段 | agent 配置 | 输入 | 输出 | 要点 |
-|---|---|---|---|---|
-| UNDERSTAND | `loop-understand` | `input.json`；回退时还有 `feedback.json` 和上一版 `requirements.json` | `requirements.md`、`requirements.json` | 可以 clone 和阅读仓库，不修改代码；自行澄清并记录假设（D3） |
-| PLAN | `loop-plan` | `requirements.json`；回退时还有 `feedback.json` | `plan.md`、`plan.json` | 步骤关联验收标准；为每条验收标准给出验证方法 |
-| EXECUTE | `loop-execute` | `requirements.json`、`plan.json`；第 2 轮起还有 `feedback.json` | 工作区改动、`iterations/<n>/execution.md`、`execution.json` | 按计划执行；记录偏离计划之处；最终交付物写入 `ARTIFACTS_DIR` |
-| VERIFY | `loop-verify` | `requirements.json`、`plan.json`、工作区当前状态 | `iterations/<n>/verify.md`、`verify.json` | 全新上下文；不读取 `execution.md`；必须实际运行检查并给出证据；不修改代码 |
+交接方式（精简交接）：Orchestrator 把输入文档以紧凑 JSON 的形式**直接写在阶段消息里**；单个文档超过 24 KiB、或总量超过 64 KiB 时改为给出文件路径。消息作为一个命令行参数传给 kiro-cli，Linux 对单个参数限制为 128 KiB，所以整条消息控制在 120 KiB 以内，超出时先改为全部引用路径，再截短重试说明。阶段**在最终回复里用一个 ```json 代码块给出结果**，不自己写交接文件，也不自己校验；Orchestrator 校验通过后写入 `.json`，并由代码渲染 `.md`（`render.py`）。实测每个阶段减少 2–4 轮模型往返：简单任务从 45 秒降到 26 秒，小型代码任务从 66 秒降到 42 秒，credits 减少约 40%。
 
-验证阶段不能读执行阶段的自述，否则容易被“已完成”之类的描述带偏。因此 `loop-verify` 的 prompt 中不提供 `execution.*` 的路径；VERIFY 运行期间，Orchestrator 还会把本轮的 `execution.md` 和 `execution.json` 移到 `/workspace` 之外，结束后再移回。
+| 阶段 | agent 配置 | 输入（写在消息里） | 输出（回复中的 JSON，由 Orchestrator 落盘） | 要点 |
+|---|---|---|---|---|
+| UNDERSTAND | `loop-understand` | `input.json`；回退时还有 `feedback.json` 和上一版 `requirements.json` | `requirements.json`（`.md` 由代码渲染） | 可以 clone 和阅读仓库，不修改代码；自行澄清并记录假设（D3）；推导标准（D-n）最多 3 条，必须可客观检查、不能与调用方标准或硬性规则冲突，超过 5 条会被驳回 |
+| PLAN | `loop-plan` | `requirements.json`；回退时还有 `feedback.json` | `plan.json` | 步骤关联验收标准；为每条验收标准给出验证方法 |
+| EXECUTE | `loop-execute` | `requirements.json`、`plan.json`；第 2 轮起还有 `feedback.json` | 工作区改动、`iterations/<n>/execution.json` | 按计划执行；记录偏离计划之处；最终交付物写入 `ARTIFACTS_DIR` |
+| VERIFY | `loop-verify` | `requirements.json`、`plan.json`、工作区当前状态 | `iterations/<n>/verify.json` | 全新上下文；看不到执行报告；必须实际运行检查并给出证据；不修改代码 |
+
+验证阶段不能读执行阶段的自述，否则容易被“已完成”之类的描述带偏。因此 VERIFY 的消息中既不包含 `execution.*` 的内容也不包含其路径；VERIFY 运行期间，Orchestrator 还会把本轮的 `execution.md` 和 `execution.json` 移到 `/workspace` 之外，结束后再移回。
 
 验证阶段不应修改代码，对此做了两层约束：
-- `loop-verify` 的 agent 配置不包含文件写入工具，它的两个报告文件用 shell heredoc 写出。
+- `loop-verify` 的 agent 配置不包含文件写入工具，它只在回复中给出验证结果。
 - Orchestrator 在验证前后分别对 `work/` 下的每个 Git 仓库计算 `git diff HEAD` 的哈希。如果已跟踪的文件发生变化，就视为阶段输出不合法，按 D2 重试。
 
-另外，阶段的 JSON 文件缺失时，如果 kiro 的最终回复里有 JSON 代码块，Orchestrator 会尝试从中恢复，恢复出的内容同样要通过校验。
+Orchestrator 取结果的顺序：agent 仍然自己写了合法的 JSON 文件时直接使用；否则从最终回复里的 JSON 代码块中**从后往前**找第一个通过校验的（回复里可能还引用了 schema 示例）。都不合法时，把最后一个代码块的校验错误作为重试说明（每条最多 500 字符，最多 30 条）。
 
 ### 主要 JSON 结构
 

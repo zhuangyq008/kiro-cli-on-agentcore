@@ -107,6 +107,11 @@ def main():
         if (loop_dir / rel.replace("{n}", n)).exists():
             emit({"type": "runError", "data": {"stage": "prompt", "message": f"{rel} should be hidden"}})
             sys.exit(3)
+    if step.get("reply") is not None:  # the phase answers with its JSON instead of writing files
+        reply = step["reply"]
+        if isinstance(reply, dict):
+            reply = json.loads(json.dumps(reply).replace("{n}", n))
+        step = {**step, "final_text": "Done.\n```json\n" + json.dumps(reply) + "\n```"}
     for rel, content in (step.get("files") or {}).items():
         p = loop_dir / rel.replace("{n}", n)
         p.parent.mkdir(parents=True, exist_ok=True)
