@@ -88,3 +88,30 @@ def test_list_models(fake_kiro):
     write({"list_models_exit": 2, "agents": {}})
     with pytest.raises(RuntimeError):
         list_models(bin_path, {})
+
+
+AUTO = "/usr/local/lib/python3.12/site-packages/opentelemetry/instrumentation/auto_instrumentation"
+
+
+def test_child_env_drops_the_wrappers_opentelemetry(monkeypatch):
+    from kiro_runtime.kiro_runner import child_env
+
+    monkeypatch.setenv("OTEL_PROPAGATORS", "xray")
+    monkeypatch.setenv("OTEL_PYTHON_DISTRO", "aws_distro")
+    monkeypatch.setenv("PYTHONPATH", f"{AUTO}:/home/agent")
+    monkeypatch.setenv("HOME", "/home/agent")
+    env = child_env({"KIRO_API_KEY": "k"})
+    assert not [k for k in env if k.startswith("OTEL_")]
+    assert env["PYTHONPATH"] == "/home/agent" and env["HOME"] == "/home/agent" and env["KIRO_API_KEY"] == "k"
+    monkeypatch.setenv("PYTHONPATH", AUTO)
+    assert "PYTHONPATH" not in child_env({})
+
+
+def test_kiro_cli_and_its_children_do_not_inherit_opentelemetry(fake_kiro, tmp_path, monkeypatch):
+    bin_path, write, calls = fake_kiro
+    write({"agents": {"loop-execute": [{"credits": 0.1}]}})
+    monkeypatch.setenv("OTEL_PROPAGATORS", "xray")
+    monkeypatch.setenv("PYTHONPATH", f"{AUTO}:/keep")
+    runner = KiroRunner(bin_path, tmp_path, Redactor(), kill_grace_seconds=1)
+    runner.run("loop-execute", "m", "low", "p", time.monotonic() + 30, {"KIRO_API_KEY": "k"})
+    assert calls()[0]["otel_vars"] == [] and calls()[0]["pythonpath"] == "/keep"

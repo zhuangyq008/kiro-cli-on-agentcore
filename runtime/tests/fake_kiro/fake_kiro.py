@@ -76,6 +76,8 @@ def main():
                     "prompt": prompt,
                     "env_has_key": "KIRO_API_KEY" in os.environ,
                     "artifacts_dir": os.environ.get("ARTIFACTS_DIR"),
+                    "otel_vars": sorted(k for k in os.environ if k.startswith("OTEL_")),
+                    "pythonpath": os.environ.get("PYTHONPATH"),
                 }
             )
             + "\n"

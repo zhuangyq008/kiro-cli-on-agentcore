@@ -24,6 +24,23 @@ EFFORT_IGNORED_MARKER = "offers no effort levels"
 STDERR_TAIL_BYTES = 4000
 
 
+def child_env(extra: Mapping[str, str]) -> dict[str, str]:
+    """Environment for kiro-cli and everything it starts (MCP servers, the agent's shell commands).
+
+    The wrapper runs under `opentelemetry-instrument`, which sets OTEL_* and puts its
+    `sitecustomize` on PYTHONPATH. Inherited by a child, that auto-instrumentation crashes Python
+    programs from other environments (e.g. `uvx` MCP servers: "Propagator xray not found"), so it
+    is removed. The wrapper's own telemetry is unaffected.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_")}
+    paths = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and "opentelemetry" not in p]
+    if paths:
+        env["PYTHONPATH"] = os.pathsep.join(paths)
+    else:
+        env.pop("PYTHONPATH", None)
+    return {**env, **extra}
+
+
 @dataclass
 class RunResult:
     exit_code: int | None
@@ -143,7 +160,7 @@ class KiroRunner:
         extra_env: Mapping[str, str],
     ) -> RunResult:
         """Run kiro-cli until it exits or `deadline` (time.monotonic()) passes."""
-        env = {**os.environ, **extra_env}
+        env = child_env(extra_env)
         cmd = build_command(self.kiro_bin, agent, model, effort, prompt)
         started = time.monotonic()
         self._log("kiro.start", {"agent": agent, "model": model, "effort": effort})
@@ -258,7 +275,7 @@ def list_model_details(kiro_bin: str, env: Mapping[str, str], timeout: float = 1
     """Return the models available to the API key in `env`: id, description, rate, context size."""
     out = subprocess.run(
         [kiro_bin, "chat", "--list-models", "-f", "json"],
-        env={**os.environ, **env},
+        env=child_env(env),
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,

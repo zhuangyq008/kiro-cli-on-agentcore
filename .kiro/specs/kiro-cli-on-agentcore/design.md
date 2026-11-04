@@ -136,6 +136,7 @@ Runtime 配置 `requestHeaderAllowlist: ["Authorization"]`，容器代码就能�
 - 自定义 agent 默认不加载 skills、steering 和 `mcp.json`，所以必须为每个任务重新生成 4 个阶段 agent：`resources` 增加 `file://~/.kiro/steering/**/*.md` 和 `skill://~/.kiro/skills/*/SKILL.md`，设置 `includeMcpJson: true`，`tools` 增加每个启用的 server 的 `@name`。以上行为已在 kiro-cli 2.35.2 headless V3 下实测确认。
 - `--agent` 不替换阶段 agent，只合并 prompt（追加在闭环规则之后）、`mcpServers`、MCP 工具选择器和 `resources`；内置工具集、模型和 hooks 仍由闭环决定。
 - kiro-cli 会静默跳过启动失败的 MCP server，并把未设置的 `${VAR}` 原样传递，所以 kac 在提交前、Runtime 在 PREFLIGHT 都会检查并给出警告。
+- wrapper 以 `opentelemetry-instrument` 启动，会设置 `OTEL_*` 并把 auto-instrumentation 的 `sitecustomize` 放进 `PYTHONPATH`。这些变量被子进程继承后，会让其他 Python 环境中的程序崩溃（实测 `uvx mcp-server-fetch` 报 `Propagator xray not found`），所以 kiro-cli 及其启动的 MCP server、shell 命令使用去掉这些变量的环境（`kiro_runner.child_env`）。
 
 ## 闭环状态机
 

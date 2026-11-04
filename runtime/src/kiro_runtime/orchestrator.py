@@ -8,7 +8,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
 import re
 import shutil
 import tempfile
@@ -21,7 +20,7 @@ from typing import Any
 
 from . import kiro_config, phases, report
 from .events import emit_metrics
-from .kiro_runner import KiroRunner, RunResult
+from .kiro_runner import KiroRunner, RunResult, child_env
 from .models import allowed_available, resolve_default
 from .redact import Redactor
 from .schemas import (
@@ -253,7 +252,7 @@ class Orchestrator:
             raise PhaseFailure(
                 "KIRO_CONFIG_INSTALL_FAILED", f"could not install kiro configuration: {e}"
             ) from e
-        env = {**os.environ, **self._secrets_env}
+        env = child_env(self._secrets_env)  # what kiro-cli and its MCP servers will see
         info = {
             **kiro_config.manifest(bundle),
             "agent": agent,
