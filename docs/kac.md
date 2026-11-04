@@ -80,6 +80,7 @@ kac submit "修复登录页的表单校验 bug，并提交 PR" \
 | `--timeout` | 整个任务的超时秒数，覆盖所有阶段 |
 | `--kiro-dir` | 同步这个 `.kiro` 目录里的 MCP、skills、steering 和 agent，见[同步 Kiro 配置](#同步-kiro-配置mcpskillssteeringagent)。也可以用环境变量 `KAC_KIRO_DIR` |
 | `--agent` | 把 `--kiro-dir` 里的这个 agent 合并进每个阶段 |
+| `--loop-mode` | `process`（默认）：每个阶段一个 kiro-cli 进程；`subagent`：一个 kiro-cli 中由调度 agent 把各阶段交给 kiro 的 sub-agent 执行。两种模式的闭环规则、校验和报告完全相同，见下文 |
 
 命令输出 task_id。每次提交都使用一个新的 Session，不支持在已有 Session 中追问。
 
@@ -124,6 +125,16 @@ export KAC_KIRO_DIR=~/.kiro   # 每次都带上时，可以用环境变量代替
 **限制**：压缩后 5 MB 以内，解压后 20 MB 以内，最多 1000 个文件（含目录最多 2000 个条目），单个文件 5 MB 以内，agent 的 front matter 64 KB 以内、prompt 64K 字符以内，front matter 不能使用 YAML 别名。不支持符号链接，隐藏文件（以 `.` 开头）不同步；文件名不能含控制字符或特殊空白，单段不超过 255 个字符、整个路径不超过 1024 个字符。`agents/` 下以 `loop-` 开头的名字是保留名，会被跳过；agent 重名会直接报错。kac 在本地按和服务端相同的规则检查，有问题会在上传前报出来。
 
 提交时 kac 会打印同步了哪些内容和警告。任务结束后，`output.md` 的 "Kiro configuration" 一节和 `loop/kiro_config.json` 会记录清单（文件数、sha256、MCP server、skill、agent 的名字）和警告，不包含文件内容。
+
+## 闭环模式（`--loop-mode`）
+
+| | `process`（默认） | `subagent` |
+|---|---|---|
+| 运行方式 | 每个阶段启动一次 kiro-cli | 只启动一个 kiro-cli，调度 agent 用快速模型（默认 `claude-haiku-5.5`，其次 `gpt-5.6-luna`），4 个阶段作为 kiro sub-agent，用任务指定的模型 |
+| 流程控制 | 代码 | 同样是代码：调度 agent 只能反复执行 `loopctl next`，按返回结果调用 sub-agent；顺序、回退、轮次、校验、重试、验证阶段的隔离都由编排器负责 |
+| 实测（简单任务 / 小型代码任务） | 26 秒 / 42 秒，0.65 / 0.85 credits | 58 秒 / 99 秒，1.36 / 2.19 credits |
+
+目前 `process` 更快也更便宜，`subagent` 适合实验。任务记录和 `output.md` 中的 "Loop mode" 会写明实际使用的模式。subagent 模式下各阶段的 credits 无法单独统计，只记录任务总数；`--effort` 只作用于调度 agent，sub-agent 使用模型的默认 effort。
 
 ## 查看可用模型
 

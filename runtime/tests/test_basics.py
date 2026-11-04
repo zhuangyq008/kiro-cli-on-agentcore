@@ -133,3 +133,10 @@ def test_load_secrets(aws):
     s = load_secrets(sm, "prod/kiro/api-key", "prod/kiro/git-credentials")
     assert s.env() == {"GITHUB_TOKEN": "ghp_1", "KIRO_API_KEY": "ksk_live_123"}
     assert set(s.values()) == {"ksk_live_123", "ghp_1"}
+
+
+def test_config_loop_mode():
+    assert Config.from_env(BASE_ENV).default_loop_mode == "process"
+    assert Config.from_env({**BASE_ENV, "DEFAULT_LOOP_MODE": "subagent"}).default_loop_mode == "subagent"
+    with pytest.raises(ConfigError):
+        Config.from_env({**BASE_ENV, "DEFAULT_LOOP_MODE": "dag"})

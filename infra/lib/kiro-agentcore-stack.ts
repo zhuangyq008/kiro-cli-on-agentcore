@@ -23,6 +23,8 @@ export interface KiroAgentCoreConfig {
   readonly defaultModels: string[];
   /** Exact model IDs or `*` / `?` patterns, e.g. `gpt-*`. */
   readonly allowedModels: string[];
+  /** "process" (one kiro-cli per phase) or "subagent" (phases as kiro sub-agents). Default: process. */
+  readonly defaultLoopMode?: string;
   readonly defaultEffort: string;
   readonly allowedEfforts: string[];
   readonly defaultMaxIterations: number;
@@ -55,6 +57,10 @@ export class KiroAgentCoreStack extends Stack {
     super(scope, id, props);
     const cfg = props.config;
     validateModelConfig(cfg.defaultModels, cfg.allowedModels);
+    const loopMode = cfg.defaultLoopMode ?? 'process';
+    if (!['process', 'subagent'].includes(loopMode)) {
+      throw new Error(`defaultLoopMode must be "process" or "subagent", got "${loopMode}"`);
+    }
     const repoRoot = path.join(__dirname, '..', '..');
 
     // ---------------------------------------------------------------- Cognito
@@ -169,6 +175,7 @@ export class KiroAgentCoreStack extends Stack {
       tracingEnabled: true,
       environmentVariables: {
         DEFAULT_MODEL: cfg.defaultModels.join(','),
+        DEFAULT_LOOP_MODE: loopMode,
         ALLOWED_MODELS: cfg.allowedModels.join(','),
         DEFAULT_EFFORT: cfg.defaultEffort,
         ALLOWED_EFFORTS: cfg.allowedEfforts.join(','),

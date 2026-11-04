@@ -9,7 +9,9 @@ import dataclasses
 import json
 import logging
 import re
+import secrets as pysecrets
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -18,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import agents as loop_agents
 from . import kiro_config, phases, render, report
 from .events import emit_metrics
 from .kiro_runner import KiroRunner, RunResult, child_env
@@ -38,6 +41,7 @@ from .schemas import (
 )
 from .secrets import SecretError, Secrets
 from .store import TaskStore, now_iso
+from .subagent_mode import ORCHESTRATOR_AGENT, LoopCtlServer, SubagentBridge, orchestrator_agent_config
 from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,7 @@ class TaskSpec:
     # Optional caller-supplied kiro configuration (MCP servers, skills, steering, agents).
     kiro_config: kiro_config.KiroConfig | None = None
     kiro_agent: str | None = None
+    loop_mode: str = "process"  # "process": one kiro-cli per phase; "subagent": phases as kiro sub-agents
 
 
 class PhaseFailure(Exception):
@@ -139,6 +144,8 @@ class Orchestrator:
         self.error_message: str | None = None
         self.phase = "PREFLIGHT"
         self._secrets_env: dict[str, str] = {}
+        self._available_models: list[str] = []
+        self._phase_runner: Any = deps.runner  # replaced by a SubagentBridge in subagent mode
         self._hb_stop = threading.Event()
 
     # ------------------------------------------------------------------ public
@@ -152,7 +159,10 @@ class Orchestrator:
         hb.start()
         try:
             self._preflight()
-            self._loop()
+            if self.spec.loop_mode == "subagent":
+                self._loop_with_subagents()
+            else:
+                self._loop()
         except TaskTimeout:
             self._fail("TIMED_OUT", "TASK_TIMEOUT", f"task exceeded {self.spec.timeout_seconds}s")
         except PhaseFailure as f:
@@ -226,6 +236,7 @@ class Orchestrator:
         self._secrets_env = {**secrets.env(), "ARTIFACTS_DIR": str(self.ws.artifacts_dir)}
         try:
             models = self.d.list_models(self._secrets_env)
+            self._available_models = list(models)
         except PermissionError as e:
             raise PhaseFailure("KIRO_AUTH_FAILED", "Kiro API key was rejected") from e
         except Exception as e:
@@ -390,6 +401,105 @@ class Orchestrator:
         self._log("loop.verdict", passed=verdict.passed, failed=verdict.failed, next=verdict.next)
         return verdict
 
+    def _loop_with_subagents(self) -> None:
+        """Run the same code-driven loop, with the phases executed as sub-agents of one kiro-cli."""
+        self._install_subagent_agents()
+        self._enable_kiro_subagents()
+        bridge = SubagentBridge(self.ws.loop_dir / "tasks", self.d.clock)
+        self._phase_runner = bridge
+        outcome: dict[str, BaseException] = {}
+        loop_thread = threading.Thread(
+            target=self._drive_loop, args=(bridge, outcome), name="loop", daemon=True
+        )
+        sock_dir = Path(tempfile.mkdtemp(prefix="loopctl-", dir="/tmp"))  # noqa: S108 - short AF_UNIX path
+        server: LoopCtlServer | None = None
+        model = (
+            resolve_default(self.cfg.orchestrator_models, self._available_models, ("*",)) or self.spec.model
+        )
+        try:
+            server = LoopCtlServer(sock_dir / "loopctl.sock", bridge).start()
+            self.d.redactor.add([server.token])
+            loop_thread.start()
+            res = self.d.runner.run(
+                agent=ORCHESTRATOR_AGENT,
+                model=model,
+                effort=self.spec.effort,
+                prompt="Start the loop now.",
+                deadline=self.phase_deadline,
+                extra_env={**self._secrets_env, **server.env()},
+            )
+        finally:
+            bridge.close()
+            if loop_thread.is_alive():
+                loop_thread.join(timeout=120)
+            if server is not None:
+                server.stop()
+            shutil.rmtree(sock_dir, ignore_errors=True)
+        self.state.credits += res.credits  # sub-agent usage is reported by the dispatcher run
+        self._log(
+            "subagent.dispatcher_exit", exit_code=res.exit_code, model=model, credits=round(res.credits, 4)
+        )
+        if res.auth_failed:
+            raise PhaseFailure("KIRO_AUTH_FAILED", "Kiro API key was rejected")
+        error = outcome.get("error")
+        if isinstance(error, PhaseFailure) and bridge.stopped_early:
+            raise PhaseFailure("ORCHESTRATOR_STOPPED", f"the dispatcher agent stopped early: {error.message}")
+        if error is not None:
+            raise error
+        if loop_thread.is_alive():
+            raise PhaseFailure(
+                "ORCHESTRATOR_STOPPED", "the loop did not stop after the dispatcher agent exited"
+            )
+        if self.status is not None:
+            return  # the loop reached its verdict; how the dispatcher ended does not change it
+        if res.timed_out:
+            raise TaskTimeout()
+        raise PhaseFailure("ORCHESTRATOR_STOPPED", "the dispatcher agent ended before the loop finished")
+
+    def _drive_loop(self, bridge: SubagentBridge, outcome: dict[str, BaseException]) -> None:
+        try:
+            self._loop()
+        except BaseException as e:  # re-raised in the main thread
+            outcome["error"] = e
+        finally:
+            bridge.finish()
+
+    def _enable_kiro_subagents(self) -> None:
+        """Turn on kiro's sub-agent feature for this microVM only (not baked into the image)."""
+        try:
+            subprocess.run(
+                [self.cfg.kiro_bin, "settings", "chat.enableSubagent", "true"],
+                env=child_env({}),
+                capture_output=True,
+                timeout=60,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.warning("could not enable kiro sub-agents: %s", e)
+
+    def _fresh_answer_path(self, phase: str, attempt: int) -> Path:
+        """A unique answer path per attempt; stray answers from earlier attempts are removed."""
+        answers = self.ws.loop_dir / "answers"
+        answers.mkdir(exist_ok=True)
+        for stale in answers.iterdir():
+            stale.unlink(missing_ok=True)
+        tag = pysecrets.token_hex(4)
+        return answers / f"{phase.lower()}-{self.state.iteration}-{attempt}-{tag}.json"
+
+    def _install_subagent_agents(self) -> None:
+        """Phase agents carry the task's model (sub-agents would otherwise use the dispatcher's)."""
+        bundle = self.spec.kiro_config
+        configs = (
+            kiro_config.phase_agents(bundle, self.spec.kiro_agent)
+            if bundle is not None
+            else {name: loop_agents.agent_config(name) for name in loop_agents.PHASES}
+        )
+        target = self.cfg.kiro_home / "agents"
+        target.mkdir(parents=True, exist_ok=True)
+        for name, conf in configs.items():
+            (target / f"{name}.json").write_text(json.dumps({**conf, "model": self.spec.model}, indent=2))
+        (target / f"{ORCHESTRATOR_AGENT}.json").write_text(json.dumps(orchestrator_agent_config(), indent=2))
+
     def _write_feedback(self, verdict: Verdict) -> None:
         verify = self.state.rounds[-1].verify
         assert verify is not None
@@ -424,6 +534,7 @@ class Orchestrator:
             self.d.store.set_phase(self.spec.task_id, phase, self.state.iteration)
             for p in (out.markdown, out.json):
                 p.unlink(missing_ok=True)
+            answer = self._fresh_answer_path(phase, attempt) if self.spec.loop_mode == "subagent" else None
             message = phases.build_message(
                 self.ws,
                 phase,
@@ -431,20 +542,24 @@ class Orchestrator:
                 self.spec.max_iterations,
                 self.ws.artifacts_dir,
                 retry_errors=errors if attempt > 1 else None,
+                answer_file=answer,
             )
             started = now_iso()
             if before_run:
                 before_run()
             extra_errors: list[str] = []
             try:
-                res = self.d.runner.run(
+                res = self._phase_runner.run(
                     agent=phases.AGENTS[phase],
                     model=self.spec.model,
                     effort=self.spec.effort,
                     prompt=message,
                     deadline=self.phase_deadline,
                     extra_env=self._secrets_env,
+                    **({"answer_file": answer} if answer else {}),
                 )
+                if answer is not None and answer.exists():
+                    answer.replace(out.json)  # accept this attempt's answer; late writers cannot touch it
             finally:
                 if after_run:
                     extra_errors = after_run()
@@ -582,6 +697,9 @@ class Orchestrator:
             "error_message": self.error_message,
             "criteria_summary": summary,
             "effort_applied": self.state.effort_applied,
+            # Authoritative total (in subagent mode the per-phase entries carry no usage).
+            "credits_used": round(self.state.credits, 6),
+            "loop_mode": self.spec.loop_mode,
         }
         for attempt in range(4):
             try:

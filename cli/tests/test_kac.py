@@ -390,3 +390,17 @@ def test_models_command_error_exit_codes(isolated, status, exit_code):
     respx.post(isolated.invoke_url).mock(return_value=body_error("X", status, "why"))
     r = runner.invoke(app, ["models"])
     assert r.exit_code == exit_code and "why" in r.stderr
+
+
+@respx.mock
+def test_submit_loop_mode(isolated):
+    write_tokens()
+    route = respx.post(isolated.invoke_url).mock(
+        return_value=httpx.Response(200, json={"task_id": "tsk_1", "session_id": "s", "status": "RUNNING"})
+    )
+    assert runner.invoke(app, ["submit", "x", "--loop-mode", "subagent"]).exit_code == 0
+    assert json.loads(route.calls[0].request.content)["loop_mode"] == "subagent"
+    assert runner.invoke(app, ["submit", "x"]).exit_code == 0
+    assert "loop_mode" not in json.loads(route.calls[1].request.content)  # server default
+    r = runner.invoke(app, ["submit", "x", "--loop-mode", "dag"])
+    assert r.exit_code == 11 and "process, subagent" in r.stderr

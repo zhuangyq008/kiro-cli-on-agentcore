@@ -37,6 +37,79 @@ def emit(obj):
     sys.stdout.flush()
 
 
+def dispatch(scenario, args):
+    """Act like the subagent-mode dispatcher: follow loopctl and play each phase sub-agent."""
+    import subprocess
+
+    log_path = Path(os.environ["FAKE_KIRO_LOG"])
+    with log_path.open("a") as f:
+        f.write(json.dumps({"agent": "loop-orchestrator", "args": args, "prompt": args[-1]}) + "\n")
+    emit({"type": "runStarted", "data": {"engine": "v3"}})
+    played = {}
+    credits = float(scenario.get("dispatcher_credits", 0))
+    for _ in range(int(scenario.get("dispatcher_max_steps", 50))):
+        out = subprocess.run(
+            [sys.executable, "-m", "kiro_runtime.loopctl", "next"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        reply = json.loads(out.stdout or '{"action": "done"}')
+        if reply.get("action") == "wait":
+            continue
+        if reply.get("action") != "invoke":
+            break
+        sub = reply["agent"]
+        task = Path(reply["task_file"]).read_text()
+        index = played.get(sub, 0)
+        played[sub] = index + 1
+        if reply.get("note"):  # the same phase again: replay the step that did not answer
+            index -= 1
+            played[sub] = index + 1
+        with log_path.open("a") as f:
+            f.write(
+                json.dumps({"agent": sub, "args": ["(sub-agent)"], "prompt": task, "subagent": True}) + "\n"
+            )
+        emit(
+            {
+                "type": "sessionUpdate",
+                "data": {"update": {"sessionUpdate": "tool_call", "title": f"Sub-agent: {sub}"}},
+            }
+        )
+        steps = scenario["agents"].get(sub, [{}])
+        step = steps[min(index, len(steps) - 1)]
+        if step.get("dispatcher_quits"):
+            break
+        if step.get("skip_first_write") and not reply.get("note"):
+            continue  # call loopctl next again before the sub-agent has answered
+        m = re.search(r"iteration (\d+) of", task)
+        n = m.group(1) if m else "0"
+        for rel, content in (step.get("artifact_files") or {}).items():
+            target = Path(os.environ["ARTIFACTS_DIR"]) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        answer = re.search(
+            r"Output: write exactly one JSON object that follows the schema below to (\S+) in", task
+        )
+        if step.get("reply") is not None and answer:
+            Path(answer.group(1)).write_text(json.dumps(step["reply"]).replace("{n}", n))
+        credits += float(step.get("credits", 0))
+    emit(
+        {
+            "type": "sessionUpdate",
+            "data": {
+                "update": {
+                    "sessionUpdate": "session_info_update",
+                    "_meta": {
+                        "kiro": {"kind": "turn_completion", "promptTurnSummaries": [{"usage": credits}]}
+                    },
+                }
+            },
+        }
+    )
+    emit({"type": "runFinished", "data": {"status": "success", "finalText": "DONE"}})
+
+
 def main():
     args = sys.argv[1:]
     scenario = json.loads(Path(os.environ["FAKE_KIRO_SCENARIO"]).read_text())
@@ -62,7 +135,12 @@ def main():
         )
         return
 
+    if args[:1] == ["settings"]:
+        return
     agent = args[args.index("--agent") + 1]
+    if agent == "loop-orchestrator":
+        dispatch(scenario, args)
+        return
     prompt = args[-1]
     log_path = Path(os.environ["FAKE_KIRO_LOG"])
     calls = [json.loads(line) for line in log_path.read_text().splitlines()] if log_path.exists() else []

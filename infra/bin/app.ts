@@ -20,6 +20,7 @@ const config: KiroAgentCoreConfig = {
   allowedModels: parseList(ctx('allowedModels'), 'allowedModels'),
   defaultEffort: ctx('defaultEffort'),
   allowedEfforts: parseList(ctx('allowedEfforts'), 'allowedEfforts'),
+  defaultLoopMode: app.node.tryGetContext('defaultLoopMode') ?? 'process',
   defaultMaxIterations: Number(ctx('defaultMaxIterations')),
   maxIterationsLimit: Number(ctx('maxIterationsLimit')),
   defaultTimeoutSeconds: Number(ctx('defaultTimeoutSeconds')),

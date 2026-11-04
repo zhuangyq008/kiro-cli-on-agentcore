@@ -118,6 +118,7 @@ def main() -> int:
         effort=os.environ.get("CHECK_EFFORT", "low"),
         max_iterations=int(os.environ.get("CHECK_MAX_ITERATIONS", "2")),
         timeout_seconds=int(os.environ.get("CHECK_TIMEOUT", "1800")),
+        loop_mode=os.environ.get("CHECK_LOOP_MODE", "process"),
     )
     redactor = Redactor()
     store = MemoryStore()

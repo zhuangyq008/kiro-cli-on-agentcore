@@ -345,3 +345,32 @@ def test_submit_rejects_unsafe_bundle(client):
         invoke(c, {"action": "submit", "prompt": "x", "kiro_config": bundle_b64({"../x": "y"})}), 400
     )
     assert "unsafe path" in err["message"] and store.items == []
+
+
+def _ran_spec(ran):
+    for _ in range(50):
+        if ran:
+            return ran[0]
+        time.sleep(0.05)
+    raise AssertionError("task did not start")
+
+
+def test_loop_mode_defaults_to_process(client):
+    build, ran, _ = client
+    c, store = build()
+    invoke(c, {"action": "submit", "prompt": "x"})
+    assert store.items[0]["loop_mode"] == "process" and _ran_spec(ran).loop_mode == "process"
+
+
+def test_loop_mode_subagent_is_accepted(client):
+    build, ran, _ = client
+    c, store = build()
+    invoke(c, {"action": "submit", "prompt": "x", "loop_mode": "subagent"})
+    assert store.items[0]["loop_mode"] == "subagent" and _ran_spec(ran).loop_mode == "subagent"
+
+
+def test_unknown_loop_mode_is_rejected(client):
+    build, _, _ = client
+    c, store = build()
+    err = error_of(invoke(c, {"action": "submit", "prompt": "x", "loop_mode": "parallel"}), 400)
+    assert err["code"] == "VALIDATION_ERROR" and "loop_mode" in err["message"] and store.items == []

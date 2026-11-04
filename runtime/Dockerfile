@@ -57,7 +57,7 @@ RUN curl -fsSL https://cli.kiro.dev/install -o /tmp/kiro-install.sh \
  && rm /tmp/kiro-install.sh \
  && kiro-cli --version
 
-# Loop phase agents.
+# Loop phase agents. (kiro sub-agents are enabled at run time, only for `subagent` loop mode tasks.)
 RUN python -m kiro_runtime.agents install /home/agent/.kiro/agents
 
 # The first V3 run unpacks its bundled runtime; do it at build time so tasks start faster.

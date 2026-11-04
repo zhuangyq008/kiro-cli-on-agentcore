@@ -106,6 +106,12 @@ def _inputs(paths: list[tuple[str, Path]], budget: int) -> tuple[list[str], list
     return inline, refs
 
 
+FILE_OUTPUT_INSTRUCTIONS = (
+    "Output: write exactly one JSON object that follows the schema below to {path} in a single write "
+    "(without a file-editing tool, use a shell heredoc), then reply DONE. Do not re-validate it with "
+    "tools: the orchestrator validates it and renders a Markdown summary. If it is rejected you will "
+    "be told why."
+)
 OUTPUT_INSTRUCTIONS = (
     "Output: your final reply must be exactly one JSON object that follows the schema below, inside a "
     "```json fenced block. Do not write the hand-off files yourself and do not re-validate the "
@@ -121,7 +127,13 @@ def build_message(
     max_iterations: int,
     artifacts_dir: Path,
     retry_errors: list[str] | None = None,
+    answer_file: Path | None = None,
 ) -> str:
+    """The task message for one phase run.
+
+    With `answer_file` (subagent mode) the phase writes its JSON there instead of replying with it,
+    because a sub-agent's reply goes to the dispatcher agent, not to the orchestrator.
+    """
     inputs: list[tuple[str, Path]] = [
         ("task input (prompt, context, caller criteria)", ws.path("input.json"))
     ]
@@ -151,7 +163,7 @@ def build_message(
         schema = VERIFY_SCHEMA
 
     errors = [e[:MAX_RETRY_ERROR_CHARS] for e in (retry_errors or [])[:MAX_RETRY_ERRORS]]
-    args = (phase, iteration, max_iterations, inputs, schema, ws, artifacts_dir)
+    args = (phase, iteration, max_iterations, inputs, schema, ws, artifacts_dir, answer_file)
     message = "\n".join(_message(*args, errors, INLINE_TOTAL_BYTES))
     while len(message.encode("utf-8")) > MAX_MESSAGE_BYTES:
         # Too big for one argv string: reference the inputs instead, then drop retry details.
@@ -170,6 +182,7 @@ def _message(
     schema: str,
     ws: Workspace,
     artifacts_dir: Path,
+    answer_file: Path | None,
     retry_errors: list[str] | None,
     budget: int,
 ) -> list[str]:
@@ -180,7 +193,7 @@ def _message(
     if refs:
         parts += ["Further inputs to read:", *refs, ""]
     parts += [
-        OUTPUT_INSTRUCTIONS,
+        OUTPUT_INSTRUCTIONS if answer_file is None else FILE_OUTPUT_INSTRUCTIONS.format(path=answer_file),
         "",
         "JSON schema (example values):",
         schema,

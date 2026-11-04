@@ -26,6 +26,7 @@ STATUS_EXIT = {
     "INCOMPLETE": EXIT_INCOMPLETE,
 }
 TERMINAL = set(STATUS_EXIT)
+LOOP_MODES = ("process", "subagent")
 
 JsonOpt = Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")]
 
@@ -92,7 +93,7 @@ def describe(task: dict[str, Any]) -> str:
         lines.append(f"criteria passed: {summary.get('passed')}/{summary.get('total')}")
     lines.append(
         f"model: {task.get('model') or '(default)'}  effort: {task.get('effort')}  "
-        f"credits: {task.get('credits_used', 0)}"
+        f"loop: {task.get('loop_mode') or 'process'}  credits: {task.get('credits_used', 0)}"
     )
     if task.get("error_code"):
         lines.append(f"error: {task['error_code']} {task.get('error_message') or ''}".rstrip())
@@ -245,6 +246,13 @@ def submit(
     agent: Annotated[
         str | None, typer.Option("--agent", help="Merge this agent from --kiro-dir into every loop phase.")
     ] = None,
+    loop_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--loop-mode",
+            help="process: one kiro-cli per phase (server default) | subagent: phases as kiro sub-agents.",
+        ),
+    ] = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Submit a task. Prints the task id."""
@@ -269,6 +277,11 @@ def submit(
     ):
         if value is not None:
             body[key] = value
+    if loop_mode is not None:
+        if loop_mode not in LOOP_MODES:
+            _err(f"--loop-mode must be one of: {', '.join(LOOP_MODES)}")
+            raise typer.Exit(EXIT_REQUEST)
+        body["loop_mode"] = loop_mode
     body.update(_kiro_config_fields(kiro_dir, agent))
     result = _run(lambda: _client().submit(body))
     _emit(result, as_json, result.get("task_id"))

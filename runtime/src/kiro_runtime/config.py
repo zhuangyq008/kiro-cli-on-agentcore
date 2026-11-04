@@ -16,6 +16,9 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_MODELS = "claude-sonnet-5.5,gpt-5.6-terra,auto"
 # Exact IDs or `*` / `?` patterns.
 ALLOWED_MODELS = "auto,claude-*,gpt-*"
+LOOP_MODES = ("process", "subagent")
+# subagent mode: the dispatcher agent only relays loopctl's instructions, so a fast model suffices.
+ORCHESTRATOR_MODELS = "claude-haiku-5.5,gpt-5.6-luna"
 
 
 class ConfigError(ValueError):
@@ -62,6 +65,8 @@ class Config:
     kill_grace_seconds: int
     # The runtime user's kiro-cli configuration directory; caller bundles are installed here.
     kiro_home: Path
+    default_loop_mode: str = "process"
+    orchestrator_models: tuple[str, ...] = tuple(ORCHESTRATOR_MODELS.split(","))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -97,6 +102,8 @@ class Config:
             finalize_reserve_seconds=_int(env, "FINALIZE_RESERVE_SECONDS", 180),
             kill_grace_seconds=_int(env, "KILL_GRACE_SECONDS", 10),
             kiro_home=Path(env.get("KIRO_HOME_DIR") or Path.home() / ".kiro"),
+            default_loop_mode=env.get("DEFAULT_LOOP_MODE", "process").strip() or "process",
+            orchestrator_models=_csv(env.get("ORCHESTRATOR_MODEL", ORCHESTRATOR_MODELS)),
         )
         cfg.validate()
         return cfg
@@ -107,6 +114,10 @@ class Config:
         bad = [p for p in self.allowed_models if not is_valid_pattern(p)]
         if bad:
             raise ConfigError(f"ALLOWED_MODELS has invalid entries: {bad}")
+        if self.default_loop_mode not in LOOP_MODES:
+            raise ConfigError(f"DEFAULT_LOOP_MODE must be one of {LOOP_MODES}")
+        if not all(is_valid_model_id(m) for m in self.orchestrator_models):
+            raise ConfigError("ORCHESTRATOR_MODEL entries must be valid model IDs")
         if not self.default_models:
             raise ConfigError("DEFAULT_MODEL must list at least one model")
         for model in self.default_models:

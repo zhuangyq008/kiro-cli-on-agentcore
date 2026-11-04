@@ -138,6 +138,15 @@ Runtime 配置 `requestHeaderAllowlist: ["Authorization"]`，容器代码就能�
 - kiro-cli 会静默跳过启动失败的 MCP server，并把未设置的 `${VAR}` 原样传递，所以 kac 在提交前、Runtime 在 PREFLIGHT 都会检查并给出警告。
 - wrapper 以 `opentelemetry-instrument` 启动，会设置 `OTEL_*` 并把 auto-instrumentation 的 `sitecustomize` 放进 `PYTHONPATH`。这些变量被子进程继承后，会让其他 Python 环境中的程序崩溃（实测 `uvx mcp-server-fetch` 报 `Propagator xray not found`），所以 kiro-cli 及其启动的 MCP server、shell 命令使用去掉这些变量的环境（`kiro_runner.child_env`）。
 
+### D9：闭环模式可选，subagent 模式下流程仍由代码控制
+
+- `process`（默认）：每个阶段一个 kiro-cli 进程，`Orchestrator._run_phase` 通过 `KiroRunner` 运行。
+- `subagent`：只运行一个 kiro-cli，agent 为 `loop-orchestrator`（只有 `shell` 和 `subagent/loop-*` 工具，模型取 `ORCHESTRATOR_MODEL` 中第一个可用的）。`_loop` 在后台线程中照常运行，阶段执行器换成 `SubagentBridge`：每个阶段的消息写入 `loop/tasks/NNN-<agent>.md`，调度 agent 通过 `python -m kiro_runtime.loopctl next`（本地 Unix socket，每个任务一个 token，JSON 行协议，不用 pickle）取得要调用的 sub-agent 和任务文件；下一次调用表示上一阶段结束，编排器随即校验其结果。阶段 agent 把 JSON 写到消息指定的文件（sub-agent 的回复只会交给调度 agent）。
+- 握手规则：阶段只有在它的回答文件存在时才算完成；在此之前收到的 `next` 会拿回同一个请求并被要求重新调用 sub-agent（最多 2 次，之后交给校验处理）。每次尝试使用独立的回答路径 `loop/answers/<phase>-<轮次>-<尝试>-<随机串>.json`，被接受后改名为正式交接文件，迟到的写入不会影响已接受的结果。回复无法送达时撤销这次发放。没有新请求时 `next` 返回 `wait`，只有闭环结束才返回 `done`。sub-agent 功能（`chat.enableSubagent`）只在 subagent 模式的任务中于运行时打开。
+- 因此两种模式共用全部闭环规则：顺序、回退、轮次、交接校验和重试、验证前隐藏执行报告并检查被跟踪文件、最终结论由代码计算。调度 agent 提前结束时任务以 `ORCHESTRATOR_STOPPED` 失败。
+- 实测 subagent 模式更慢、更贵（简单任务 58 秒对 26 秒，小型代码任务 99 秒对 42 秒，credits 约 2 倍；原因是调度 agent 自身的推理轮次和 sub-agent 启动开销，而阶段之间是串行依赖，无法并行），所以默认使用 `process`。
+- 已知边界：phase agent 与编排器以同一系统用户运行，恶意的 agent 本来就能伪造交接文件；代码校验防的是出错的 agent，不是恶意的 agent。真正的隔离需要让 agent 以不同用户运行、`/workspace/loop` 只允许编排器写入（两种模式相同）。
+
 ## 闭环状态机
 
 ```mermaid

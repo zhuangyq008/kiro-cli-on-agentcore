@@ -62,6 +62,8 @@ class SubmitRequest(BaseModel):
     # base64 of a gzip tar with an allow-listed part of a .kiro directory (see kiro_config.py)
     kiro_config: str | None = Field(default=None, max_length=MAX_KIRO_CONFIG_B64)
     kiro_agent: str | None = None
+    # "process": one kiro-cli per phase (default); "subagent": the phases run as kiro sub-agents
+    loop_mode: Literal["process", "subagent"] | None = None
 
     @field_validator("prompt")
     @classmethod
@@ -270,6 +272,7 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
             timeout_seconds=timeout,
             kiro_config=bundle,
             kiro_agent=kiro_agent,
+            loop_mode=req.loop_mode or cfg.default_loop_mode,
         )
         created = now_iso()
         try:
@@ -289,6 +292,7 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
                     "started_at": created,
                     "artifacts_prefix": f"s3://{cfg.artifacts_bucket}/{task_id}/",
                     "kiro_config": {**manifest(bundle), "agent": kiro_agent} if bundle else None,
+                    "loop_mode": spec.loop_mode,
                 }
             )
         except Exception:

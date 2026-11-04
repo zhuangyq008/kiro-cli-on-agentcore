@@ -65,6 +65,7 @@ def build_result(
         "error_code": error_code,
         "error_message": error_message,
         "kiro_config": state.kiro_config,
+        "loop_mode": spec.loop_mode,
     }
 
 
@@ -102,6 +103,7 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
         f"- Model: {spec.model or '(not selected)'}, effort: {spec.effort}"
         + ("" if state.effort_applied else " (not supported by this model, ignored)"),
         f"- Credits used: {result['credits_used']:.4f}",
+        f"- Loop mode: {spec.loop_mode}",
     ]
     if result.get("error_code"):
         lines.append(f"- Error: `{result['error_code']}` {result.get('error_message') or ''}")
