@@ -137,3 +137,12 @@ def test_report_has_no_misleading_loop_numbers_and_caps_the_answer(harness):  # 
 
 def test_direct_prompt_keeps_the_credentials_rule():
     assert "Never print, echo, log or write the values" in agents.agent_config(agents.DIRECT_AGENT)["prompt"]
+
+
+def test_success_text_does_not_claim_verification(harness):  # noqa: F811
+    make, _, _, _, s3_text = harness
+    orch, _, _ = make({"agents": {"loop-direct": [DIRECT_OK]}}, spec_overrides=none_spec())
+    assert orch.run() == "SUCCEEDED"
+    report = s3_text("output.md")
+    assert "independent verification" not in report.split("## Answer")[0]
+    assert "single run" in report.split("## Answer")[0]

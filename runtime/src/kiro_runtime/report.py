@@ -16,6 +16,12 @@ STATUS_TEXT = {
     "FAILED": "The task failed before the loop could finish.",
     "TIMED_OUT": "The task exceeded its timeout.",
 }
+# loop_mode "none" has no verification phase, so success means only that the single run finished.
+DIRECT_STATUS_TEXT = {
+    **STATUS_TEXT,
+    "SUCCEEDED": "The single run finished without errors (loop mode none: not independently verified).",
+    "FAILED": "The single run failed.",
+}
 
 
 def build_result(
@@ -114,11 +120,12 @@ def _md_escape(text: str) -> str:
 
 def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[str, Any]) -> str:
     lines: list[str] = [f"# Task {spec.task_id}", ""]
+    status_texts = DIRECT_STATUS_TEXT if spec.loop_mode == "none" else STATUS_TEXT
     passed = sum(1 for c in result["criteria"] if c["status"] == "pass")
     lines += [
         "## Result",
         "",
-        f"- Status: **{status}**. {STATUS_TEXT.get(status, '')}",
+        f"- Status: **{status}**. {status_texts.get(status, '')}",
         *(
             []
             if spec.loop_mode == "none"
