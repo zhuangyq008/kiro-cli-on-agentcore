@@ -389,7 +389,10 @@ else
     APP_STATUS="NONE"
   fi
   if [[ "$APP_STATUS" == *COMPLETE && "$APP_STATUS" != *ROLLBACK_COMPLETE ]]; then
-    info "服务已经部署过，这次会用当前代码升级（未变化的部分不会重建）。"
+    CUR_VERSION="$(stack_output "$APP_STACK" ServiceVersion 2>/dev/null || true)"
+    [[ "$CUR_VERSION" =~ ^[0-9A-Za-z.+-]{1,40}$ && "$CUR_VERSION" != "None" ]] || CUR_VERSION="0.1.0 或更早"
+    info "服务已经部署过，这次会用当前代码升级（未变化的部分不会重建）：版本 ${CUR_VERSION} → ${VERSION}"
+    info "各版本的变化见 CHANGELOG.md。"
     # 升级时沿用当前的模型设置，除非这次用参数指定了新值。
     CUR_DEFAULT="$(stack_output "$APP_STACK" DefaultModels 2>/dev/null || true)"
     CUR_ALLOWED="$(stack_output "$APP_STACK" AllowedModels 2>/dev/null || true)"

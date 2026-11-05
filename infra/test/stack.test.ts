@@ -15,6 +15,7 @@ const config = {
   gitCredentialsSecretName: 'prod/kiro/git-credentials',
   kiroCliVersion: '2.35.2',
   cognitoDomainPrefix: 'kiro-agentcore-test',
+  serviceVersion: '9.9.9',
   machineClientNames: [],
 };
 
@@ -184,6 +185,7 @@ test('model settings are exported for install.sh upgrades', () => {
   template.hasOutput('DefaultModels', { Value: 'claude-sonnet-5.5,gpt-5.6-terra,auto' });
   template.hasOutput('AllowedModels', { Value: 'auto,claude-*,gpt-*' });
   template.hasOutput('DefaultLoopMode', { Value: 'none' });
+  template.hasOutput('ServiceVersion', { Value: '9.9.9' });
 });
 
 test('synth rejects an unknown loop mode', () => {

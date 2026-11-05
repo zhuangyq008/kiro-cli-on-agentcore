@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import * as fs from 'fs';
+import * as path from 'path';
 import { App } from 'aws-cdk-lib';
 import { KiroAgentCoreConfig, KiroAgentCoreStack } from '../lib/kiro-agentcore-stack';
 import { parseList } from '../lib/model-config';
@@ -21,6 +23,7 @@ const config: KiroAgentCoreConfig = {
   defaultEffort: ctx('defaultEffort'),
   allowedEfforts: parseList(ctx('allowedEfforts'), 'allowedEfforts'),
   defaultLoopMode: app.node.tryGetContext('defaultLoopMode') ?? 'none',
+  serviceVersion: fs.readFileSync(path.join(__dirname, '..', '..', 'VERSION'), 'utf-8').trim(),
   defaultMaxIterations: Number(ctx('defaultMaxIterations')),
   maxIterationsLimit: Number(ctx('maxIterationsLimit')),
   defaultTimeoutSeconds: Number(ctx('defaultTimeoutSeconds')),

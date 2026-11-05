@@ -13,6 +13,19 @@ uv tool install --python 3.12 '.[aws]'      # 或：pipx install '.[aws]'
 
 `[aws]` 会额外安装 boto3，只有 `configure --from-stack` 用得到它。
 
+## 更新与版本
+
+拿到新版本代码后重新安装即可，配置（`~/.config/kac/config.toml`）和登录状态（`tokens.json`）都会保留：
+
+```bash
+git pull
+uv tool install --force --python 3.12 './cli[aws]'   # 或：pipx install --force './cli[aws]'
+kac --version                                         # 客户端版本，例如 kac 0.2.0
+kac models                                            # 最后一行显示服务端版本（service version）
+```
+
+客户端和服务端使用同一个版本号（仓库根目录的 `VERSION`），每个任务的 `result.json` 和 `output.md` 也会记录运行它的服务端版本。各版本的变化见 [CHANGELOG.md](../CHANGELOG.md)。旧版 kac 可以继续提交和查询任务，但用不了新参数（例如 0.2.0 的 `--loop-mode`、`--kiro-dir`、`kac models`）。
+
 ## 配置
 
 ```bash

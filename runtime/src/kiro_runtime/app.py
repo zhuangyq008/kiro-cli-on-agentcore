@@ -15,6 +15,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.responses import JSONResponse
 
+from . import service_version
 from .config import Config
 from .identity import IdentityError, caller_from_headers
 from .kiro_config import MAX_BUNDLE_BYTES, KiroConfig, KiroConfigError, decode_bundle, manifest
@@ -185,6 +186,7 @@ def models_response(cfg: Config, details: list[dict[str, Any]]) -> dict[str, Any
         "default_model": resolve_default(cfg.default_models, ids, cfg.allowed_models),
         "default_preference": list(cfg.default_models),
         "allowed_patterns": list(cfg.allowed_models),
+        "service_version": service_version(),
     }
 
 
@@ -309,6 +311,7 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
                     "artifacts_prefix": f"s3://{cfg.artifacts_bucket}/{task_id}/",
                     "kiro_config": {**manifest(bundle), "agent": kiro_agent} if bundle else None,
                     "loop_mode": spec.loop_mode,
+                    "service_version": service_version(),
                 }
             )
         except Exception:

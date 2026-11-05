@@ -146,3 +146,13 @@ def test_success_text_does_not_claim_verification(harness):  # noqa: F811
     report = s3_text("output.md")
     assert "independent verification" not in report.split("## Answer")[0]
     assert "single run" in report.split("## Answer")[0]
+
+
+def test_result_records_the_service_version(harness):  # noqa: F811
+    from kiro_runtime import service_version
+
+    make, _, _, _, s3_text = harness
+    orch, _, _ = make({"agents": {"loop-direct": [DIRECT_OK]}}, spec_overrides=none_spec())
+    orch.run()
+    assert json.loads(s3_text("result.json"))["service_version"] == service_version()
+    assert f"Service version: {service_version()}" in s3_text("output.md")

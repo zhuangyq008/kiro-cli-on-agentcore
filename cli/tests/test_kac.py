@@ -426,3 +426,26 @@ def test_submit_prints_server_warnings(isolated):
     assert (
         r.exit_code == 0 and r.stdout.strip() == "tsk_1" and "warning: max_iterations is ignored" in r.stderr
     )
+
+
+def test_version_flag(isolated):
+    from importlib.metadata import version
+
+    for flag in ("--version", "-V"):
+        r = runner.invoke(app, [flag])
+        assert r.exit_code == 0 and r.stdout.strip() == f"kac {version('kac')}"
+
+
+@respx.mock
+def test_models_command_shows_the_service_version(isolated):
+    write_tokens()
+    respx.post(isolated.invoke_url).mock(
+        return_value=httpx.Response(200, json={**MODELS, "service_version": "9.9.9"})
+    )
+    r = runner.invoke(app, ["models"])
+    assert "service version: 9.9.9" in r.stdout
+
+
+def test_bare_kac_still_shows_help(isolated):
+    r = runner.invoke(app, [])
+    assert "Usage" in r.output and "submit" in r.output

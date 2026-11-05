@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from . import service_version
+
 if TYPE_CHECKING:
     from .orchestrator import LoopState, TaskSpec
 
@@ -78,6 +80,7 @@ def build_result(
         "kiro_config": state.kiro_config,
         "loop_mode": spec.loop_mode,
         "final_answer": state.final_answer,
+        "service_version": service_version(),
     }
 
 
@@ -138,6 +141,7 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
         + ("" if state.effort_applied else " (not supported by this model, ignored)"),
         f"- Credits used: {result['credits_used']:.4f}",
         f"- Loop mode: {spec.loop_mode}",
+        f"- Service version: {service_version()}",
     ]
     if result.get("error_code"):
         lines.append(f"- Error: `{result['error_code']}` {result.get('error_message') or ''}")

@@ -125,13 +125,16 @@ cd kiro-cli-on-agentcore
 
 ## 升级
 
-拿到新版本代码后，在新代码目录中重新运行 `./install.sh`。向导会复用已有的配置和 secret，只更新有变化的部分，并重新跑一遍冒烟测试。
+拿到新版本代码后，在新代码目录中重新运行 `./install.sh`。向导会显示"版本 旧 → 新"，复用已有的配置和 secret（模型设置、运行方式也会沿用），只更新有变化的部分，重新跑一遍冒烟测试，并把 CloudShell 中的 kac 一起更新。
 
 ```bash
 cd kiro-cli-on-agentcore
 git pull            # 方式 A；方式 B 则重新上传并解压新的 zip 包
 ./install.sh
+kac --version       # 确认 CloudShell 中的 kac 已是新版本
 ```
+
+在其他电脑上使用 kac 的同事，需要各自更新客户端：`git pull` 后执行 `uv tool install --force --python 3.12 './cli[aws]'`，详见 [kac 使用说明](kac.md#更新与版本)。升级前请先看 [CHANGELOG.md](../CHANGELOG.md) 中的"不兼容的变化"。
 
 ## 只重跑冒烟测试
 

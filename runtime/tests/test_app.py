@@ -401,3 +401,16 @@ def test_loop_modes_do_not_warn(client):
         c, {"action": "submit", "prompt": "x", "acceptance_criteria": ["a"], "loop_mode": "process"}
     ).json()
     assert "warnings" not in body
+
+
+def test_service_version_in_models_and_task_record(client):
+    from kiro_runtime import service_version
+
+    build, _, _ = client
+    c, store = build()
+    assert (
+        invoke(c, {"action": "models"}, session="kac-" + "9" * 36).json()["service_version"]
+        == service_version()
+    )
+    invoke(c, {"action": "submit", "prompt": "x"})
+    assert store.items[0]["service_version"] == service_version()

@@ -1,6 +1,6 @@
 [project]
 name = "kiro-runtime"
-version = "0.1.0"
+version = "0.2.0"
 description = "AgentCore Runtime wrapper that runs kiro-cli in a closed-loop orchestrator"
 requires-python = ">=3.12"
 dependencies = [

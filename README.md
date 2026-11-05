@@ -64,6 +64,7 @@ kac wait <task_id> && kac result <task_id>
 | [docs/kac.md](docs/kac.md) | 所有使用者：kac 命令、退出码、错误码 |
 | [docs/deployment.md](docs/deployment.md) | 开发者和运维：本机部署、部署参数、日志与指标、并发配额 |
 | [docs/spike-findings.md](docs/spike-findings.md) | 开发者：kiro-cli headless 和 AgentCore 的技术验证结论 |
+| [CHANGELOG.md](CHANGELOG.md) | 所有人：各版本的变化，升级前请先看"不兼容的变化" |
 | [.kiro/specs/kiro-cli-on-agentcore/](.kiro/specs/kiro-cli-on-agentcore/) | 开发者：需求、设计、任务清单 |
 
 ## 开发

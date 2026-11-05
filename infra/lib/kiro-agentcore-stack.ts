@@ -25,6 +25,8 @@ export interface KiroAgentCoreConfig {
   readonly allowedModels: string[];
   /** "none" (single run, no closed loop; default), "process" or "subagent" (closed loop). */
   readonly defaultLoopMode?: string;
+  /** Service version (VERSION at the repository root); exported for the installer's upgrade notice. */
+  readonly serviceVersion: string;
   readonly defaultEffort: string;
   readonly allowedEfforts: string[];
   readonly defaultMaxIterations: number;
@@ -319,6 +321,7 @@ export class KiroAgentCoreStack extends Stack {
     out('DefaultModels', cfg.defaultModels.join(','));
     out('AllowedModels', cfg.allowedModels.join(','));
     out('DefaultLoopMode', loopMode);
+    out('ServiceVersion', cfg.serviceVersion);
     out('RuntimeLogGroupName', runtimeLogGroupName);
     out('QueryApiUrl', api.apiEndpoint);
     out('UserPoolId', userPool.userPoolId);

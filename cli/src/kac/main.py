@@ -17,6 +17,38 @@ from .api import Client, RequestError, ServerError, safe_join
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 
+
+def client_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("kac")
+    except PackageNotFoundError:  # pragma: no cover - running from a source tree without install
+        return "unknown"
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        typer.echo(f"kac {client_version()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    _version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            "-V",
+            callback=_print_version,
+            is_eager=True,
+            help="Show the kac version and exit (the service version is shown by `kac models`).",
+        ),
+    ] = False,
+) -> None:
+    """kac: submit tasks to kiro-cli on AgentCore and collect the results."""
+
+
 EXIT_OK, EXIT_FAILED, EXIT_TIMED_OUT, EXIT_INCOMPLETE = 0, 1, 2, 3
 EXIT_AUTH, EXIT_REQUEST, EXIT_SERVER = 10, 11, 12
 STATUS_EXIT = {
@@ -369,6 +401,7 @@ def _models_text(data: dict[str, Any], show_all: bool) -> str:
     lines.append(f"default preference: {', '.join(data.get('default_preference') or [])}")
     lines.append(f"allowed patterns:   {', '.join(data.get('allowed_patterns') or [])}")
     lines.append("rate = Kiro credit multiplier")
+    lines.append(f"service version: {data.get('service_version') or 'unknown'}  (kac {client_version()})")
     return "\n".join(lines)
 
 
