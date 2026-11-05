@@ -7,7 +7,7 @@
   "context": {
     "defaultModel": ["claude-sonnet-5.5", "gpt-5.6-terra", "auto"],
     "allowedModels": ["auto", "claude-*", "gpt-*"],
-    "defaultLoopMode": "process",
+    "defaultLoopMode": "none",
     "defaultEffort": "high",
     "allowedEfforts": ["low", "medium", "high", "xhigh", "max"],
     "defaultMaxIterations": 3,

@@ -403,4 +403,26 @@ def test_submit_loop_mode(isolated):
     assert runner.invoke(app, ["submit", "x"]).exit_code == 0
     assert "loop_mode" not in json.loads(route.calls[1].request.content)  # server default
     r = runner.invoke(app, ["submit", "x", "--loop-mode", "dag"])
-    assert r.exit_code == 11 and "process, subagent" in r.stderr
+    assert r.exit_code == 11 and "none, process, subagent" in r.stderr
+    assert runner.invoke(app, ["submit", "x", "--loop-mode", "none"]).exit_code == 0
+    assert json.loads(route.calls[2].request.content)["loop_mode"] == "none"
+
+
+@respx.mock
+def test_submit_prints_server_warnings(isolated):
+    write_tokens()
+    respx.post(isolated.invoke_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "task_id": "tsk_1",
+                "session_id": "s",
+                "status": "RUNNING",
+                "warnings": ["max_iterations is ignored"],
+            },
+        )
+    )
+    r = runner.invoke(app, ["submit", "x", "--max-iterations", "2"])
+    assert (
+        r.exit_code == 0 and r.stdout.strip() == "tsk_1" and "warning: max_iterations is ignored" in r.stderr
+    )

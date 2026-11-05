@@ -16,7 +16,8 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_MODELS = "claude-sonnet-5.5,gpt-5.6-terra,auto"
 # Exact IDs or `*` / `?` patterns.
 ALLOWED_MODELS = "auto,claude-*,gpt-*"
-LOOP_MODES = ("process", "subagent")
+# "none": one kiro-cli run without the closed loop (default); "process" / "subagent": closed loop.
+LOOP_MODES = ("none", "process", "subagent")
 # subagent mode: the dispatcher agent only relays loopctl's instructions, so a fast model suffices.
 ORCHESTRATOR_MODELS = "claude-haiku-5.5,gpt-5.6-luna"
 
@@ -65,7 +66,7 @@ class Config:
     kill_grace_seconds: int
     # The runtime user's kiro-cli configuration directory; caller bundles are installed here.
     kiro_home: Path
-    default_loop_mode: str = "process"
+    default_loop_mode: str = "none"
     orchestrator_models: tuple[str, ...] = tuple(ORCHESTRATOR_MODELS.split(","))
 
     @classmethod
@@ -102,7 +103,7 @@ class Config:
             finalize_reserve_seconds=_int(env, "FINALIZE_RESERVE_SECONDS", 180),
             kill_grace_seconds=_int(env, "KILL_GRACE_SECONDS", 10),
             kiro_home=Path(env.get("KIRO_HOME_DIR") or Path.home() / ".kiro"),
-            default_loop_mode=env.get("DEFAULT_LOOP_MODE", "process").strip() or "process",
+            default_loop_mode=env.get("DEFAULT_LOOP_MODE", "none").strip() or "none",
             orchestrator_models=_csv(env.get("ORCHESTRATOR_MODEL", ORCHESTRATOR_MODELS)),
         )
         cfg.validate()

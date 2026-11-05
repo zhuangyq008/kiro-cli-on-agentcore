@@ -156,7 +156,8 @@ def test_warnings_for_unset_vars_missing_commands_and_ignored_fields():
 def test_phase_agents_merge_user_config_into_every_phase():
     cfg = kc.parse_bundle(tar_bytes(full_bundle()))
     agents = kc.phase_agents(cfg, "aws-expert")
-    assert set(agents) == {"loop-understand", "loop-plan", "loop-execute", "loop-verify"}
+    assert set(agents) == {"loop-understand", "loop-plan", "loop-execute", "loop-verify", "loop-direct"}
+    assert "@awsdocs" in agents["loop-direct"]["tools"]  # the single-run agent gets the overlay too
     ex = agents["loop-execute"]
     assert ex["includeMcpJson"] is True
     assert ex["tools"][:5] == ["read", "write", "shell", "grep", "glob"]

@@ -58,11 +58,12 @@ fi
 echo "== submitting"
 t1="$(submit "What is 17 multiplied by 3? Write only the number into a file named answer.txt in the directory given by the ARTIFACTS_DIR environment variable." \
   --ac "answer.txt in the artifacts directory contains exactly 51" --max-iterations 2 --timeout 1800)"
-echo "   1. question into an artifact (expect SUCCEEDED): $t1"
+echo "   1. question into an artifact, single run (expect SUCCEEDED): $t1"
 t2="$(submit "In /workspace/work/calc create a git repository with calc.py defining add(a, b) and a pytest test file for it. Commit both files." \
   --ac "Running 'python -m pytest -q' in /workspace/work/calc passes with at least one test" \
-  --ac "The git repository in /workspace/work/calc has a commit containing calc.py" --max-iterations 3 --timeout 3600)"
-echo "   2. small code task (expect SUCCEEDED, loop files complete): $t2"
+  --ac "The git repository in /workspace/work/calc has a commit containing calc.py" --max-iterations 3 --timeout 3600 \
+  --loop-mode process)"
+echo "   2. small code task in the closed loop (expect SUCCEEDED, loop files complete): $t2"
 t3="$(submit "Write a detailed 20-section design document about distributed consensus algorithms into the ARTIFACTS_DIR directory." \
   --timeout 60)"
 echo "   3. 60 second timeout (expect TIMED_OUT): $t3"

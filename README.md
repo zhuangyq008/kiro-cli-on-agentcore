@@ -1,6 +1,9 @@
 # kiro-cli on AWS AgentCore
 
-把 kiro-cli 以 headless 模式运行在 Amazon Bedrock AgentCore Runtime 上，提供一个异步的远程 agent 服务。每个任务在独立的 microVM 中按闭环执行：
+把 kiro-cli 以 headless 模式运行在 Amazon Bedrock AgentCore Runtime 上，提供一个异步的远程 agent 服务。每个任务在独立的 microVM 中运行，有两种方式（`kac submit --loop-mode`）：
+
+- **`none`（默认）**：kiro-cli 直接运行一次完成任务，最快最省；验收标准交给 agent 自查，不做独立验证。
+- **`process` / `subagent`**：按闭环执行，交付结果经过独立验证：
 
 ```
 UNDERSTAND（理解需求）→ PLAN（规划）→ EXECUTE（执行）→ VERIFY（独立验证）→ 决策
@@ -8,9 +11,12 @@ UNDERSTAND（理解需求）→ PLAN（规划）→ EXECUTE（执行）→ VERIF
                 └───────────────┴───────────────┴──── 验证未通过时回退 ────┘
 ```
 
+闭环模式下：
 - 阶段顺序、回退和轮次由代码控制。每个阶段单独运行一次 kiro-cli，阶段之间通过 JSON 文件交接，并做校验。
 - 验证阶段使用全新上下文，看不到执行阶段的自述，必须逐条给出证据。全部验收标准通过才算成功。
 - 需求不明确时，agent 自行澄清并记录假设，不向人提问。
+
+所有方式：
 - 结果写入 S3，状态记录在 DynamoDB，任务结束时向 EventBridge 发布事件。
 - 本地用 `kac` 命令行提交任务、查询状态和下载结果，鉴权使用 Cognito OAuth。
 
@@ -46,7 +52,7 @@ kac configure --from-stack KiroAgentCoreStack
 kac login
 kac models                                 # 查看可用模型（Claude、GPT 等，取决于 Kiro API key）
 kac submit "..." --kiro-dir ~/.kiro --agent my-agent   # 带上本地的 MCP、skills、steering 和 agent
-kac submit "修复 issue #12 并提 PR" --context "仓库: https://github.com/org/repo" --ac "所有现有测试通过"
+kac submit "修复 issue #12 并提 PR" --context "仓库: https://github.com/org/repo" --ac "所有现有测试通过" --loop-mode process   # 需要独立验证时用闭环
 kac wait <task_id> && kac result <task_id>
 ```
 

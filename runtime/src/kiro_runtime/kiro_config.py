@@ -598,7 +598,7 @@ def phase_agents(cfg: KiroConfig, agent: str | None) -> dict[str, dict[str, Any]
     own = _enabled(_own_servers(cfg, agent))
     extra = (user or {}).get("prompt")
     result = {}
-    for name in loop_agents.PHASES:
+    for name in loop_agents.ALL_AGENTS:
         base = loop_agents.agent_config(name)
         conf = {
             **base,

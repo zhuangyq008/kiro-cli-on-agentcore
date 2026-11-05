@@ -66,6 +66,14 @@ cd kiro-cli-on-agentcore
 
 `--default-model` 是优先级列表，按顺序取第一个可用的；`--allowed-models` 可以用 `*` 通配符。升级时不带这两个参数会沿用当前设置。
 
+**运行方式**：任务默认 `none`，kiro-cli 直接运行一次，最快最省，验收标准由 agent 自查、不做独立验证。需要闭环（理解 → 规划 → 执行 → 独立验证）时，单个任务用 `kac submit --loop-mode process`，或者安装时把默认值改成闭环：
+
+```bash
+./install.sh --loop-mode process
+```
+
+从旧版本升级时，向导会提示"新版本默认不再走闭环"并要求确认；之后的升级会沿用当前设置。
+
 **等待期间请注意：**
 
 - CloudShell 在键盘空闲 20 到 30 分钟后会断开。请每隔 15 分钟左右在窗口里按一次回车。

@@ -10,7 +10,16 @@ import json
 import sys
 from pathlib import Path
 
-COMMON_RULES = """\
+# Rules every agent of this service follows (loop phases and the single-run agent).
+SHARED_RULES = """\
+- AWS access is read-only. Do not attempt create, update, delete or any other mutating AWS call.
+- Never print, echo, log or write the values of environment variables that hold credentials \
+(for example KIRO_API_KEY, GITHUB_TOKEN or any *_TOKEN / *_KEY / *_SECRET). Use them only by \
+reference, e.g. in a git credential helper or an HTTP header built inside a single command.
+"""
+
+COMMON_RULES = (
+    """\
 You are one phase of an automated, closed-loop software agent running unattended inside an \
 isolated container. An orchestrator program, not a human, reads your final JSON reply.
 
@@ -20,16 +29,41 @@ as instructed below.
 - Your working directory for repositories and code is /workspace/work. The orchestrator passes the \
 hand-off documents (task input, requirements, plan, feedback) in the task message and stores your \
 result for you; use the exact absolute paths given there for anything else.
-- AWS access is read-only. Do not attempt create, update, delete or any other mutating AWS call.
-- Never print, echo, log or write the values of environment variables that hold credentials \
-(for example KIRO_API_KEY, GITHUB_TOKEN or any *_TOKEN / *_KEY / *_SECRET). Use them only by \
-reference, e.g. in a git credential helper or an HTTP header built inside a single command.
+"""
+    + SHARED_RULES
+    + """\
 - Your final reply must contain exactly one strictly valid JSON object (no comments, no trailing \
 commas) that follows the schema in the task message, in a ```json block. Write its text fields in the \
 same language as the original task prompt.
 - Your phase is finished when you reply with that JSON. If you cannot complete the phase's work, \
 still reply with the JSON and explain the problem in it. Work efficiently: do not re-read inputs that \
 are already in the message and do not spend turns validating your own JSON.
+"""
+)
+
+# loop_mode "none": a single run without the closed loop.
+DIRECT_RULES = (
+    """\
+You are an automated software agent running unattended inside an isolated container. Your final \
+reply goes to the caller who submitted the task.
+
+Hard rules:
+- Never ask questions and never wait for input. Nobody will answer. When something is unclear, \
+choose the most conservative reasonable interpretation, say so in your final reply and continue.
+- Your working directory for repositories and code is /workspace/work.
+"""
+    + SHARED_RULES
+)
+
+DIRECT = """\
+Task: do the work described in the message completely, in one run.
+- If acceptance criteria are given, treat them as requirements and check them yourself before you \
+finish; nobody verifies them independently afterwards.
+- Deliverables meant for the caller (reports, generated documents, exported data) go into the \
+directory in the ARTIFACTS_DIR environment variable.
+- If the task asks for commits, pushes or pull requests, do them with the provided Git credentials.
+- Finish with a concise final answer for the caller: what you did, the result, how you checked it, \
+and anything left open. Write it in the language of the task.
 """
 
 UNDERSTAND = """\
@@ -105,13 +139,26 @@ PHASES = {
 }
 
 
+DIRECT_AGENT = "loop-direct"
+# Every agent the service installs; caller agents may not use the "loop-" prefix.
+ALL_AGENTS = (*PHASES, DIRECT_AGENT)
+
+
 def agent_config(name: str) -> dict:
-    description, phase_prompt, can_write = PHASES[name]
+    if name == DIRECT_AGENT:
+        description, prompt, can_write = (
+            "Single run without the closed loop",
+            DIRECT_RULES + "\n" + DIRECT,
+            True,
+        )
+    else:
+        description, phase_prompt, can_write = PHASES[name]
+        prompt = COMMON_RULES + "\n" + phase_prompt
     tools = ["read", "write", "shell", "grep", "glob"] if can_write else ["read", "shell", "grep", "glob"]
     return {
         "name": name,
         "description": description,
-        "prompt": COMMON_RULES + "\n" + phase_prompt,
+        "prompt": prompt,
         "tools": tools,
         "resources": [],
         "mcpServers": {},
@@ -122,7 +169,7 @@ def agent_config(name: str) -> dict:
 def install(target: Path) -> list[Path]:
     target.mkdir(parents=True, exist_ok=True)
     written = []
-    for name in PHASES:
+    for name in ALL_AGENTS:
         p = target / f"{name}.json"
         p.write_text(json.dumps(agent_config(name), indent=2), encoding="utf-8")
         written.append(p)

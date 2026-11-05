@@ -62,8 +62,9 @@ class SubmitRequest(BaseModel):
     # base64 of a gzip tar with an allow-listed part of a .kiro directory (see kiro_config.py)
     kiro_config: str | None = Field(default=None, max_length=MAX_KIRO_CONFIG_B64)
     kiro_agent: str | None = None
-    # "process": one kiro-cli per phase (default); "subagent": the phases run as kiro sub-agents
-    loop_mode: Literal["process", "subagent"] | None = None
+    # "none": a single kiro-cli run without the closed loop (default); "process": closed loop with one
+    # kiro-cli per phase; "subagent": closed loop with the phases as kiro sub-agents
+    loop_mode: Literal["none", "process", "subagent"] | None = None
 
     @field_validator("prompt")
     @classmethod
@@ -133,6 +134,21 @@ def resolve(req: SubmitRequest, cfg: Config) -> tuple[str | None, str, int, int]
             f"timeout_seconds must be between {MIN_TIMEOUT_SECONDS} and {cfg.max_timeout_seconds}"
         )
     return model, effort, max_iterations, timeout
+
+
+def submit_warnings(req: SubmitRequest, loop_mode: str) -> list[str]:
+    """Settings that do not do what the caller may expect in the chosen mode."""
+    if loop_mode != "none":
+        return []
+    notes = []
+    if req.max_iterations is not None:
+        notes.append("max_iterations is ignored because loop_mode is none (single run)")
+    if req.acceptance_criteria:
+        notes.append(
+            "loop_mode is none: the agent checks the acceptance criteria itself; they are not "
+            "independently verified (use loop_mode process for that)"
+        )
+    return notes
 
 
 def load_kiro_config(req: SubmitRequest) -> tuple[KiroConfig | None, str | None]:
@@ -308,7 +324,11 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
             },
         )
         threading.Thread(target=background, args=(spec,), name=f"task-{task_id}", daemon=True).start()
-        return {"task_id": task_id, "session_id": session_id, "status": "RUNNING"}
+        response: dict[str, Any] = {"task_id": task_id, "session_id": session_id, "status": "RUNNING"}
+        notes = submit_warnings(req, spec.loop_mode)
+        if notes:
+            response["warnings"] = notes
+        return response
 
     return app
 

@@ -71,7 +71,8 @@ def build_command(kiro_bin: str, agent: str, model: str, effort: str | None, pro
     ]
     if effort:
         cmd += ["--effort", effort]
-    cmd.append(prompt)
+    # The prompt is the last argv item: never let it look like an option (e.g. "--model=x").
+    cmd.append(f"Task: {prompt}" if prompt.startswith("-") else prompt)
     return cmd
 
 

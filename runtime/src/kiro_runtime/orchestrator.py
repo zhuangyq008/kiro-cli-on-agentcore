@@ -47,6 +47,7 @@ from .workspace import Workspace
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2
+MAX_ANSWER_CHARS = 20000  # loop_mode "none": the final answer kept in output.md / result.json
 NEXT_PHASE = {"execute": "EXECUTE", "plan": "PLAN", "understand": "UNDERSTAND"}
 
 
@@ -63,10 +64,12 @@ class TaskSpec:
     effort: str
     max_iterations: int
     timeout_seconds: int
+    # "none": single run; "process": closed loop, one kiro-cli per phase; "subagent": closed loop with
+    # the phases as kiro sub-agents. Required, so internal callers cannot silently pick a mode.
+    loop_mode: str
     # Optional caller-supplied kiro configuration (MCP servers, skills, steering, agents).
     kiro_config: kiro_config.KiroConfig | None = None
     kiro_agent: str | None = None
-    loop_mode: str = "process"  # "process": one kiro-cli per phase; "subagent": phases as kiro sub-agents
 
 
 class PhaseFailure(Exception):
@@ -112,6 +115,7 @@ class LoopState:
     credits: float = 0.0
     effort_applied: bool = True
     kiro_config: dict[str, Any] | None = None  # manifest and warnings, for the report
+    final_answer: str | None = None  # loop_mode "none": the agent's final reply
 
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -159,7 +163,9 @@ class Orchestrator:
         hb.start()
         try:
             self._preflight()
-            if self.spec.loop_mode == "subagent":
+            if self.spec.loop_mode == "none":
+                self._run_direct()
+            elif self.spec.loop_mode == "subagent":
                 self._loop_with_subagents()
             else:
                 self._loop()
@@ -400,6 +406,54 @@ class Orchestrator:
         )
         self._log("loop.verdict", passed=verdict.passed, failed=verdict.failed, next=verdict.next)
         return verdict
+
+    def _run_direct(self) -> None:
+        """loop_mode "none": one kiro-cli run with the caller's task; no independent verification."""
+        self.phase = "RUN"
+        self.state.iteration = 1
+        self.d.store.set_phase(self.spec.task_id, "RUN", 1)
+        started = now_iso()
+        res = self.d.runner.run(
+            agent=loop_agents.DIRECT_AGENT,
+            model=self.spec.model,
+            effort=self.spec.effort,
+            prompt=phases.build_direct_message(self.ws, self.ws.artifacts_dir),
+            deadline=self.phase_deadline,
+            extra_env=self._secrets_env,
+        )
+        self.state.credits += res.credits
+        if res.effort_ignored:
+            self.state.effort_applied = False
+        entry = {
+            "phase": "RUN",
+            "iteration": 1,
+            "attempt": 1,
+            "started_at": started,
+            "ended_at": now_iso(),
+            "credits": round(res.credits, 6),
+            "exit_code": res.exit_code,
+        }
+        if res.auth_failed:
+            self._record(entry, "auth_failed")
+            raise PhaseFailure("KIRO_AUTH_FAILED", "Kiro API key was rejected")
+        if res.timed_out:
+            self._record(entry, "timed_out")
+            raise TaskTimeout()
+        if res.exit_code != 0:
+            self._record(entry, "failed")
+            detail = f": {res.run_error}" if res.run_error else ""
+            raise PhaseFailure(
+                f"KIRO_EXIT_{res.exit_code}", f"kiro-cli exited with code {res.exit_code}{detail}"
+            )
+        if res.run_error:  # no validation step in this mode, so an in-stream error must fail the task
+            self._record(entry, "failed")
+            raise PhaseFailure("KIRO_RUN_ERROR", f"kiro-cli reported an error: {res.run_error}")
+        self._record(entry, "ok")
+        answer = res.final_text or ""  # already redacted by the runner
+        if len(answer) > MAX_ANSWER_CHARS:
+            answer = answer[:MAX_ANSWER_CHARS] + "\n\n(truncated)"
+        self.state.final_answer = answer
+        self.status = "SUCCEEDED"
 
     def _loop_with_subagents(self) -> None:
         """Run the same code-driven loop, with the phases executed as sub-agents of one kiro-cli."""

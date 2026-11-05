@@ -105,7 +105,7 @@ test('runtime uses public network, JWT auth with scope, header allowlist and lif
     EnvironmentVariables: Match.objectLike({
       DEFAULT_MODEL: 'claude-sonnet-5.5,gpt-5.6-terra,auto',
       ALLOWED_MODELS: 'auto,claude-*,gpt-*',
-      DEFAULT_LOOP_MODE: 'process',
+      DEFAULT_LOOP_MODE: 'none',
       KIRO_API_KEY_SECRET_NAME: 'prod/kiro/api-key',
       DEFAULT_MAX_ITERATIONS: '3',
     }),
@@ -183,6 +183,7 @@ test('synth fails when a default model is not covered by the allow list', () => 
 test('model settings are exported for install.sh upgrades', () => {
   template.hasOutput('DefaultModels', { Value: 'claude-sonnet-5.5,gpt-5.6-terra,auto' });
   template.hasOutput('AllowedModels', { Value: 'auto,claude-*,gpt-*' });
+  template.hasOutput('DefaultLoopMode', { Value: 'none' });
 });
 
 test('synth rejects an unknown loop mode', () => {

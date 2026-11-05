@@ -16,6 +16,8 @@
 #                          （任务未指定模型时，用第一个 Kiro API key 可用的模型）
 #   --allowed-models LIST  允许使用的模型，逗号分隔，可用通配符，例如 'gpt-*,auto' 或 '*'
 #                          两项都不指定时：首次安装用默认值，升级时沿用当前设置
+#   --loop-mode MODE       任务默认的运行方式：none（默认，单次运行、不做独立验证）、
+#                          process 或 subagent（闭环、独立验证）；升级时不指定则沿用当前设置
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -38,6 +40,7 @@ SMOKE_ONLY=false
 INSTALL_KAC=true
 DEFAULT_MODEL_OPT=""
 ALLOWED_MODELS_OPT=""
+LOOP_MODE_OPT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --yes) ASSUME_YES=true; shift ;;
@@ -49,6 +52,9 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 && -n "$2" ]] || { echo "$1 需要一个值（用 --help 查看用法）" >&2; exit 2; }
       if [[ "$1" == "--default-model" ]]; then DEFAULT_MODEL_OPT="$2"; else ALLOWED_MODELS_OPT="$2"; fi
       shift 2 ;;
+    --loop-mode)
+      [[ $# -ge 2 && "$2" =~ ^(none|process|subagent)$ ]] || { echo "--loop-mode 只能是 none、process 或 subagent" >&2; exit 2; }
+      LOOP_MODE_OPT="$2"; shift 2 ;;
     -h|--help) sed -n '2,/^set -euo pipefail/{/^set -euo/!p;}' "$0"; exit 0 ;;
     *) echo "未知参数：$1（用 --help 查看用法）" >&2; exit 2 ;;
   esac
@@ -207,11 +213,12 @@ env = [
   {"name": "KIRO_API_KEY_SECRET_NAME", "value": api, "type": "PLAINTEXT"},
   {"name": "GIT_CREDENTIALS_SECRET_NAME", "value": git, "type": "PLAINTEXT"},
 ]
-for name, value in (("DEFAULT_MODEL", default_model), ("ALLOWED_MODELS", allowed_models)):
+loop_mode = sys.argv[6]
+for name, value in (("DEFAULT_MODEL", default_model), ("ALLOWED_MODELS", allowed_models), ("DEFAULT_LOOP_MODE", loop_mode)):
   if value:
     env.append({"name": name, "value": value, "type": "PLAINTEXT"})
 print(json.dumps(env))' "$1" "$API_KEY_SECRET" "${GIT_SECRET_EFFECTIVE:-NONE}" \
-    "${DEFAULT_MODEL_OPT:-}" "${ALLOWED_MODELS_OPT:-}")"
+    "${DEFAULT_MODEL_OPT:-}" "${ALLOWED_MODELS_OPT:-}" "${LOOP_MODE_OPT:-}")"
   aws codebuild start-build --project-name "$PROJECT" --source-type-override S3 \
     --source-location-override "$2" --environment-variables-override "$env_json" \
     --query 'build.id' --output text
@@ -402,6 +409,18 @@ else
       [[ -z "$ALLOWED_MODELS_OPT" && "$CUR_ALLOWED" != "None" ]] && ALLOWED_MODELS_OPT="$CUR_ALLOWED"
     fi
   fi
+  if [[ "$APP_STATUS" == *COMPLETE && "$APP_STATUS" != *ROLLBACK_COMPLETE && -z "$LOOP_MODE_OPT" ]]; then
+    CUR_LOOP="$(stack_output "$APP_STACK" DefaultLoopMode 2>/dev/null || true)"
+    if [[ "$CUR_LOOP" =~ ^(none|process|subagent)$ ]]; then
+      LOOP_MODE_OPT="$CUR_LOOP"
+    else
+      warn "新版本的任务默认不再走闭环：默认改为 none（单次运行，验收标准不做独立验证）。"
+      info "当前部署的任务默认走闭环（独立验证）。要保留，请取消后加 --loop-mode process 重新运行；"
+      info "单个任务也可以随时用 kac submit --loop-mode process 选择闭环。"
+      confirm "按新的默认值 none 继续吗？" Y || die "已取消。"
+    fi
+  fi
+  info "任务默认的运行方式：${LOOP_MODE_OPT:-none（默认）}（none=单次运行；process/subagent=闭环、独立验证）"
   info "默认模型（按顺序取第一个 Kiro API key 可用的）：${DEFAULT_MODEL_OPT:-claude-sonnet-5.5,gpt-5.6-terra,auto（默认）}"
   info "允许使用的模型：${ALLOWED_MODELS_OPT:-auto,claude-*,gpt-*（默认）}"
   info "可用 --default-model / --allowed-models 修改；部署后用 kac models 查看实际可用的模型。"

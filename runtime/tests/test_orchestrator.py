@@ -97,6 +97,7 @@ def harness(fake_kiro, aws, tmp_path):
             effort="high",
             max_iterations=3,
             timeout_seconds=600,
+            loop_mode="process",
         )
         if spec_overrides:
             spec = dataclasses.replace(spec, **spec_overrides)

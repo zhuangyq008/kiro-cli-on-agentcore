@@ -80,7 +80,7 @@ kac submit "修复登录页的表单校验 bug，并提交 PR" \
 | `--timeout` | 整个任务的超时秒数，覆盖所有阶段 |
 | `--kiro-dir` | 同步这个 `.kiro` 目录里的 MCP、skills、steering 和 agent，见[同步 Kiro 配置](#同步-kiro-配置mcpskillssteeringagent)。也可以用环境变量 `KAC_KIRO_DIR` |
 | `--agent` | 把 `--kiro-dir` 里的这个 agent 合并进每个阶段 |
-| `--loop-mode` | `process`（默认）：每个阶段一个 kiro-cli 进程；`subagent`：一个 kiro-cli 中由调度 agent 把各阶段交给 kiro 的 sub-agent 执行。两种模式的闭环规则、校验和报告完全相同，见下文 |
+| `--loop-mode` | `none`（默认）：不走闭环，kiro-cli 直接运行一次；`process`：闭环，每个阶段一个 kiro-cli 进程；`subagent`：闭环，各阶段作为 kiro 的 sub-agent 执行。见下文 |
 
 命令输出 task_id。每次提交都使用一个新的 Session，不支持在已有 Session 中追问。
 
@@ -126,15 +126,19 @@ export KAC_KIRO_DIR=~/.kiro   # 每次都带上时，可以用环境变量代替
 
 提交时 kac 会打印同步了哪些内容和警告。任务结束后，`output.md` 的 "Kiro configuration" 一节和 `loop/kiro_config.json` 会记录清单（文件数、sha256、MCP server、skill、agent 的名字）和警告，不包含文件内容。
 
-## 闭环模式（`--loop-mode`）
+## 运行模式（`--loop-mode`）
 
-| | `process`（默认） | `subagent` |
-|---|---|---|
-| 运行方式 | 每个阶段启动一次 kiro-cli | 只启动一个 kiro-cli，调度 agent 用快速模型（默认 `claude-haiku-5.5`，其次 `gpt-5.6-luna`），4 个阶段作为 kiro sub-agent，用任务指定的模型 |
-| 流程控制 | 代码 | 同样是代码：调度 agent 只能反复执行 `loopctl next`，按返回结果调用 sub-agent；顺序、回退、轮次、校验、重试、验证阶段的隔离都由编排器负责 |
-| 实测（简单任务 / 小型代码任务） | 26 秒 / 42 秒，0.65 / 0.85 credits | 58 秒 / 99 秒，1.36 / 2.19 credits |
+| | `none`（默认） | `process` | `subagent` |
+|---|---|---|---|
+| 运行方式 | kiro-cli 直接运行一次 | 闭环：理解 → 规划 → 执行 → 独立验证，每个阶段一个 kiro-cli | 同样的闭环，只启动一个 kiro-cli，调度 agent 用快速模型（默认 `claude-haiku-5.5`，其次 `gpt-5.6-luna`），4 个阶段作为 kiro sub-agent |
+| 验收标准（`--ac`） | 交给 agent 当作要求并自查，**不做独立验证**；报告中标为 "not independently verified" | 由独立的验证阶段逐条检查，未通过会回退修正 | 同 `process` |
+| 成功的含义 | kiro-cli 正常结束 | 所有验收标准通过独立验证 | 同 `process` |
+| `--max-iterations` | 不适用 | 生效 | 生效 |
+| 报告 | agent 的最终回答 + 产物 | 需求、计划、每轮验证结果和证据 | 同 `process` |
 
-目前 `process` 更快也更便宜，`subagent` 适合实验。任务记录和 `output.md` 中的 "Loop mode" 会写明实际使用的模式。subagent 模式下各阶段的 credits 无法单独统计，只记录任务总数；`--effort` 只作用于调度 agent，sub-agent 使用模型的默认 effort。
+选择建议：问答、查询、生成文档、小改动用默认的 `none`；要求"测试必须通过""必须提 PR"等需要可靠交付的任务用 `--loop-mode process`。`process` 比 `subagent` 更快也更便宜（实测简单任务 26 秒对 58 秒，小型代码任务 42 秒对 99 秒），`subagent` 适合实验。
+
+`none` 模式下 `status` 只显示一个阶段 `RUN`；`kac wait` 的退出码含义不变（成功 0、失败 1、超时 2；不会出现 INCOMPLETE）。任务记录和 `output.md` 中的 "Loop mode" 会写明实际使用的模式。subagent 模式下各阶段的 credits 无法单独统计，只记录任务总数；`--effort` 只作用于调度 agent，sub-agent 使用模型的默认 effort。
 
 ## 查看可用模型
 

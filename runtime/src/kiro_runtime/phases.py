@@ -209,3 +209,34 @@ def _message(
             *[f"- {e}" for e in retry_errors],
         ]
     return parts
+
+
+def build_direct_message(ws: Workspace, artifacts_dir: Path) -> str:
+    """The message for a single run (loop_mode "none"): the caller's task itself."""
+    task = json.loads(ws.path("input.json").read_text(encoding="utf-8"))
+    criteria = task.get("acceptance_criteria") or []
+    # Service text first: the message is kiro-cli's last argv item, and a caller prompt such as
+    # "-h" or "--agent=x" at the start would otherwise be parsed as a kiro-cli option.
+    parts = ["Task from the caller:", "", task.get("prompt", "")]
+    if task.get("context"):
+        parts += ["", "Context:", task["context"]]
+    if criteria:
+        parts += ["", "Acceptance criteria (check them yourself before you finish):"]
+        parts += [f"- U-{i}: {c}" for i, c in enumerate(criteria, start=1)]
+    parts += [
+        "",
+        f"Repository and code working directory: {ws.work_dir}",
+        f"Caller deliverables directory (ARTIFACTS_DIR): {artifacts_dir}",
+    ]
+    message = "\n".join(parts)
+    if len(message.encode("utf-8")) > MAX_MESSAGE_BYTES:  # too big for one argv string
+        message = "\n".join(
+            [
+                "Your task (prompt, context and acceptance criteria) is too large to include here.",
+                f"Read it from {ws.path('input.json')} and do it completely.",
+                "",
+                f"Repository and code working directory: {ws.work_dir}",
+                f"Caller deliverables directory (ARTIFACTS_DIR): {artifacts_dir}",
+            ]
+        )
+    return message

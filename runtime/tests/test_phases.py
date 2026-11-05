@@ -7,7 +7,7 @@ from kiro_runtime.workspace import Workspace
 def test_agent_configs(tmp_path):
     written = agents.install(tmp_path)
     names = sorted(p.stem for p in written)
-    assert names == ["loop-execute", "loop-plan", "loop-understand", "loop-verify"]
+    assert names == ["loop-direct", "loop-execute", "loop-plan", "loop-understand", "loop-verify"]
     for p in written:
         cfg = json.loads(p.read_text())
         assert cfg["name"] == p.stem and "Never ask questions" in cfg["prompt"]

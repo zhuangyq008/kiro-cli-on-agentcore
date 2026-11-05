@@ -265,3 +265,14 @@
 5. THE 系统 SHALL 把 MCP 配置中明文的 env、headers 值加入脱敏列表；SHALL 不在 DynamoDB、S3、日志或事件中保存配置内容，只保存清单（文件数、sha256、MCP server、skill、agent 名称）和警告。
 6. THE 系统 SHALL 支持 MCP 配置使用 `${VAR}` 引用任务环境变量 secret 中的值；WHEN 引用的变量未设置、或 MCP server 的启动命令在镜像中不存在 THEN 系统 SHALL 在任务记录和最终报告中给出警告。
 7. THE Runtime 镜像 SHALL 包含 Node.js LTS 和 uv，使 `npx`、`uvx` 方式启动的 MCP server 可以运行。
+
+### 需求 17：可选的单次运行模式（默认）
+
+**用户故事：** 作为调用方，我希望不需要独立验证的任务能直接运行一次 kiro-cli 完成，更快、更省 credits；需要可靠交付时再选择闭环。
+
+#### 验收标准
+
+1. THE 提交请求 SHALL 支持 `loop_mode`：`none`（单次运行）、`process`、`subagent`（闭环，见需求 3）；默认值由部署参数 `defaultLoopMode` 决定，默认为 `none`。
+2. WHEN `loop_mode` 为 `none` THEN 系统 SHALL 只运行一次 kiro-cli，消息中包含 prompt、context 和验收标准，并保留硬性规则（不提问、AWS 只读、不输出凭证）。
+3. WHEN `loop_mode` 为 `none` THEN 系统 SHALL 不做独立验证；kiro-cli 正常结束时任务为 `SUCCEEDED`，超时为 `TIMED_OUT`，认证失败或异常退出为 `FAILED`；报告 SHALL 包含 agent 的最终回答，并把验收标准标为未经独立验证。
+4. THE 同步的 kiro 配置（需求 16）SHALL 同样适用于单次运行。

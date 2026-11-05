@@ -57,7 +57,7 @@ npx cdk deploy
 |---|---|---|
 | `defaultModel` | `claude-sonnet-5.5, gpt-5.6-terra, auto` | 默认模型的**优先级列表**：任务未指定模型时，使用第一个 Kiro API key 可用的模型。每一项都必须被 `allowedModels` 允许 |
 | `allowedModels` | `auto, claude-*, gpt-*` | 允许使用的模型，可写精确 ID 或 `*` / `?` 通配符；`*` 表示 API key 能用的全部模型 |
-| `defaultLoopMode` | `process` | 任务未指定 `--loop-mode` 时使用的闭环模式：`process` 或 `subagent` |
+| `defaultLoopMode` | `none` | 任务未指定 `--loop-mode` 时使用的模式：`none`（单次运行，不走闭环）、`process` 或 `subagent`（闭环）。从旧版本升级时注意：默认值已从闭环改为 `none`，需要独立验证的任务要显式加 `--loop-mode process`，或部署时设 `-c defaultLoopMode=process`（CloudShell 向导：`./install.sh --loop-mode process`，升级时沿用 stack 输出 `DefaultLoopMode`） |
 | `defaultEffort` / `allowedEfforts` | `high` / 全部 5 级 | `claude-haiku-5.5` 不支持 effort，指定了也会被忽略；GPT 5.6 系列支持全部 5 级 |
 | `defaultMaxIterations` / `maxIterationsLimit` | 3 / 5 | 闭环轮数的默认值和上限 |
 | `defaultTimeoutSeconds` / `maxTimeoutSeconds` | 7200 / 27000 | 上限要给 8 小时的 Session 留出收尾时间 |

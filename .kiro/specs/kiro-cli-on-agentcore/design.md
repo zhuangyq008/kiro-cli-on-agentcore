@@ -140,6 +140,7 @@ Runtime 配置 `requestHeaderAllowlist: ["Authorization"]`，容器代码就能�
 
 ### D9：闭环模式可选，subagent 模式下流程仍由代码控制
 
+- `none`（默认）：不走闭环，`loop-direct` agent 运行一次 kiro-cli（共用硬性规则：不提问、AWS 只读、不输出凭证；没有交接 JSON 协议）。消息中直接给出 prompt、context 和验收标准，验收标准由 agent 自查、不做独立验证。kiro-cli 正常结束即 `SUCCEEDED`，阶段历史只有一条 `RUN`，报告包含最终回答，验收标准标为 `not_verified`。同步的 kiro 配置同样合并进 `loop-direct`。
 - `process`（默认）：每个阶段一个 kiro-cli 进程，`Orchestrator._run_phase` 通过 `KiroRunner` 运行。
 - `subagent`：只运行一个 kiro-cli，agent 为 `loop-orchestrator`（只有 `shell` 和 `subagent/loop-*` 工具，模型取 `ORCHESTRATOR_MODEL` 中第一个可用的）。`_loop` 在后台线程中照常运行，阶段执行器换成 `SubagentBridge`：每个阶段的消息写入 `loop/tasks/NNN-<agent>.md`，调度 agent 通过 `python -m kiro_runtime.loopctl next`（本地 Unix socket，每个任务一个 token，JSON 行协议，不用 pickle）取得要调用的 sub-agent 和任务文件；下一次调用表示上一阶段结束，编排器随即校验其结果。阶段 agent 把 JSON 写到消息指定的文件（sub-agent 的回复只会交给调度 agent）。
 - 握手规则：阶段只有在它的回答文件存在时才算完成；在此之前收到的 `next` 会拿回同一个请求并被要求重新调用 sub-agent（最多 2 次，之后交给校验处理）。每次尝试使用独立的回答路径 `loop/answers/<phase>-<轮次>-<尝试>-<随机串>.json`，被接受后改名为正式交接文件，迟到的写入不会影响已接受的结果。回复无法送达时撤销这次发放。没有新请求时 `next` 返回 `wait`，只有闭环结束才返回 `done`。sub-agent 功能（`chat.enableSubagent`）只在 subagent 模式的任务中于运行时打开。

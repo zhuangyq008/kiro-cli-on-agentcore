@@ -26,7 +26,7 @@ STATUS_EXIT = {
     "INCOMPLETE": EXIT_INCOMPLETE,
 }
 TERMINAL = set(STATUS_EXIT)
-LOOP_MODES = ("process", "subagent")
+LOOP_MODES = ("none", "process", "subagent")
 
 JsonOpt = Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")]
 
@@ -250,7 +250,8 @@ def submit(
         str | None,
         typer.Option(
             "--loop-mode",
-            help="process: one kiro-cli per phase (server default) | subagent: phases as kiro sub-agents.",
+            help="none: single run, no closed loop (server default) | process: closed loop, one kiro-cli "
+            "per phase | subagent: closed loop with the phases as kiro sub-agents.",
         ),
     ] = None,
     as_json: JsonOpt = False,
@@ -284,6 +285,8 @@ def submit(
         body["loop_mode"] = loop_mode
     body.update(_kiro_config_fields(kiro_dir, agent))
     result = _run(lambda: _client().submit(body))
+    for warning in result.get("warnings") or []:
+        _err(f"warning: {warning}")
     _emit(result, as_json, result.get("task_id"))
 
 

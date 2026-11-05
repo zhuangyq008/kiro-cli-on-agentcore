@@ -23,7 +23,7 @@ export interface KiroAgentCoreConfig {
   readonly defaultModels: string[];
   /** Exact model IDs or `*` / `?` patterns, e.g. `gpt-*`. */
   readonly allowedModels: string[];
-  /** "process" (one kiro-cli per phase) or "subagent" (phases as kiro sub-agents). Default: process. */
+  /** "none" (single run, no closed loop; default), "process" or "subagent" (closed loop). */
   readonly defaultLoopMode?: string;
   readonly defaultEffort: string;
   readonly allowedEfforts: string[];
@@ -57,9 +57,9 @@ export class KiroAgentCoreStack extends Stack {
     super(scope, id, props);
     const cfg = props.config;
     validateModelConfig(cfg.defaultModels, cfg.allowedModels);
-    const loopMode = cfg.defaultLoopMode ?? 'process';
-    if (!['process', 'subagent'].includes(loopMode)) {
-      throw new Error(`defaultLoopMode must be "process" or "subagent", got "${loopMode}"`);
+    const loopMode = cfg.defaultLoopMode ?? 'none';
+    if (!['none', 'process', 'subagent'].includes(loopMode)) {
+      throw new Error(`defaultLoopMode must be "none", "process" or "subagent", got "${loopMode}"`);
     }
     const repoRoot = path.join(__dirname, '..', '..');
 
@@ -318,6 +318,7 @@ export class KiroAgentCoreStack extends Stack {
     // Read back by install.sh so an upgrade keeps the model settings chosen at install time.
     out('DefaultModels', cfg.defaultModels.join(','));
     out('AllowedModels', cfg.allowedModels.join(','));
+    out('DefaultLoopMode', loopMode);
     out('RuntimeLogGroupName', runtimeLogGroupName);
     out('QueryApiUrl', api.apiEndpoint);
     out('UserPoolId', userPool.userPoolId);

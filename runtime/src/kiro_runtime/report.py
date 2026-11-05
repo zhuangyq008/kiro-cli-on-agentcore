@@ -28,6 +28,11 @@ def build_result(
 ) -> dict[str, Any]:
     last = next((r for r in reversed(state.rounds) if r.verify is not None), None)
     criteria = []
+    if spec.loop_mode == "none":  # no requirements phase: report the caller's criteria as given
+        criteria = [
+            {"id": f"U-{i}", "text": c, "source": "user", "status": "not_verified", "evidence": None}
+            for i, c in enumerate(spec.acceptance_criteria, start=1)
+        ]
     if state.requirements is not None:
         results = {r.criterion: r for r in (last.verify.results if last and last.verify else [])}
         for c in state.requirements.acceptance_criteria:
@@ -66,7 +71,23 @@ def build_result(
         "error_message": error_message,
         "kiro_config": state.kiro_config,
         "loop_mode": spec.loop_mode,
+        "final_answer": state.final_answer,
     }
+
+
+def _direct_lines(state: LoopState, result: dict[str, Any]) -> list[str]:
+    lines = ["## Answer", "", (state.final_answer or "(no final answer)").strip(), ""]
+    if result["criteria"]:
+        lines += [
+            "## Acceptance criteria (not independently verified)",
+            "",
+            "Loop mode none runs the task once; the agent was asked to check these itself. "
+            "Use --loop-mode process for independent verification.",
+            "",
+            *[f"- {c['id']}: {c['text']}" for c in result["criteria"]],
+            "",
+        ]
+    return lines
 
 
 def _kiro_config_lines(info: dict[str, Any] | None) -> list[str]:
@@ -98,8 +119,14 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
         "## Result",
         "",
         f"- Status: **{status}**. {STATUS_TEXT.get(status, '')}",
-        f"- Iterations: {state.iteration} / {spec.max_iterations}",
-        f"- Acceptance criteria passed: {passed} / {len(result['criteria'])}",
+        *(
+            []
+            if spec.loop_mode == "none"
+            else [
+                f"- Iterations: {state.iteration} / {spec.max_iterations}",
+                f"- Acceptance criteria passed: {passed} / {len(result['criteria'])}",
+            ]
+        ),
         f"- Model: {spec.model or '(not selected)'}, effort: {spec.effort}"
         + ("" if state.effort_applied else " (not supported by this model, ignored)"),
         f"- Credits used: {result['credits_used']:.4f}",
@@ -109,6 +136,8 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
         lines.append(f"- Error: `{result['error_code']}` {result.get('error_message') or ''}")
     lines.append("")
     lines += _kiro_config_lines(state.kiro_config)
+    if spec.loop_mode == "none":
+        lines += _direct_lines(state, result)
 
     req = state.requirements
     if req is not None:
@@ -118,7 +147,7 @@ def build_output_md(spec: TaskSpec, status: str, state: LoopState, result: dict[
         if req.scope.out:
             lines += ["Out of scope:", *[f"- {s}" for s in req.scope.out], ""]
 
-    if result["criteria"]:
+    if result["criteria"] and spec.loop_mode != "none":
         lines += ["## Acceptance criteria", "", "| ID | Criterion | Result |", "|---|---|---|"]
         for c in result["criteria"]:
             lines.append(f"| {c['id']} | {_md_escape(c['text'])} | {c['status']} |")

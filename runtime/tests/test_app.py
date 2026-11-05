@@ -355,10 +355,17 @@ def _ran_spec(ran):
     raise AssertionError("task did not start")
 
 
-def test_loop_mode_defaults_to_process(client):
+def test_loop_mode_defaults_to_none(client):
     build, ran, _ = client
     c, store = build()
     invoke(c, {"action": "submit", "prompt": "x"})
+    assert store.items[0]["loop_mode"] == "none" and _ran_spec(ran).loop_mode == "none"
+
+
+def test_loop_mode_process_is_accepted(client):
+    build, ran, _ = client
+    c, store = build()
+    invoke(c, {"action": "submit", "prompt": "x", "loop_mode": "process"})
     assert store.items[0]["loop_mode"] == "process" and _ran_spec(ran).loop_mode == "process"
 
 
@@ -374,3 +381,23 @@ def test_unknown_loop_mode_is_rejected(client):
     c, store = build()
     err = error_of(invoke(c, {"action": "submit", "prompt": "x", "loop_mode": "parallel"}), 400)
     assert err["code"] == "VALIDATION_ERROR" and "loop_mode" in err["message"] and store.items == []
+
+
+def test_none_mode_submit_warns_about_ignored_settings(client):
+    build, _, _ = client
+    c, _ = build()
+    body = invoke(
+        c, {"action": "submit", "prompt": "x", "acceptance_criteria": ["a"], "max_iterations": 2}
+    ).json()
+    assert body["status"] == "RUNNING"
+    assert any("max_iterations is ignored" in w for w in body["warnings"])
+    assert any("not independently verified" in w for w in body["warnings"])
+
+
+def test_loop_modes_do_not_warn(client):
+    build, _, _ = client
+    c, _ = build()
+    body = invoke(
+        c, {"action": "submit", "prompt": "x", "acceptance_criteria": ["a"], "loop_mode": "process"}
+    ).json()
+    assert "warnings" not in body

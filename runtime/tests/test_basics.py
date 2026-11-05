@@ -136,7 +136,8 @@ def test_load_secrets(aws):
 
 
 def test_config_loop_mode():
-    assert Config.from_env(BASE_ENV).default_loop_mode == "process"
-    assert Config.from_env({**BASE_ENV, "DEFAULT_LOOP_MODE": "subagent"}).default_loop_mode == "subagent"
+    assert Config.from_env(BASE_ENV).default_loop_mode == "none"
+    for mode in ("none", "process", "subagent"):
+        assert Config.from_env({**BASE_ENV, "DEFAULT_LOOP_MODE": mode}).default_loop_mode == mode
     with pytest.raises(ConfigError):
         Config.from_env({**BASE_ENV, "DEFAULT_LOOP_MODE": "dag"})
