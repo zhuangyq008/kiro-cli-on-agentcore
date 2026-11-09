@@ -2,6 +2,23 @@
 
 版本号见仓库根目录的 `VERSION`。客户端（`kac --version`）和服务端（`kac models` 中的 service version）使用同一个版本号。
 
+## 0.2.1
+
+### 性能
+
+- Runtime 改用 AgentCore Runtime V2（platform version `V2`）：部署时平台启动一次容器并打快照，之后每个任务的 microVM 都从快照恢复，不再拉取 1.7 GB 的镜像。实测每个任务的冷启动从 13.5–17.7 秒降到 2–3 秒，`kac submit` 返回 task_id 也相应变快。
+
+### 需要注意
+
+- `cdk deploy` 和 CloudShell 安装向导的部署步骤多出约 4 分钟（平台准备快照）。
+- 每次部署后，最初几个任务的 kiro-cli 首次启动会慢 5–20 秒，之后恢复正常。部署后可以运行几次 `kac models` 预热（不消耗 credits，每次使用新的 session）。
+- `RuntimeStarted` 指标改为在每个 microVM 收到第一个请求时上报（原来在进程启动时上报，切到 V2 后只会在打快照时报一次）。
+
+### 修复
+
+- OpenTelemetry 的 trace/span ID 改由操作系统随机源生成。默认生成器使用 Python 的 `random`，其状态会被打进快照，导致从同一快照恢复的 microVM 生成相同的 ID。每个 microVM 收到第一个请求时，也会给 `random` 重新播种。
+- `kac models` 列模型的服务端超时从 30 秒放宽到 45 秒，以覆盖新快照下 kiro-cli 首次启动的耗时。
+
 ## 0.2.0
 
 ### 不兼容的变化

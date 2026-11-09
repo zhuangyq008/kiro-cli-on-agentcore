@@ -113,6 +113,10 @@ test('runtime uses public network, JWT auth with scope, header allowlist and lif
   });
 });
 
+test('runtime starts sessions from a snapshot (platform version V2)', () => {
+  template.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { PlatformVersion: 'V2' });
+});
+
 test('runtime role is read-only with explicit denies and scoped writes', () => {
   template.hasResourceProperties('AWS::IAM::Role', {
     ManagedPolicyArns: Match.arrayWith([

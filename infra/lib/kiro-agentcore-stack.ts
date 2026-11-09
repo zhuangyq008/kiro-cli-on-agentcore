@@ -167,6 +167,10 @@ export class KiroAgentCoreStack extends Stack {
         platform: Platform.LINUX_ARM64,
         buildArgs: { KIRO_CLI_VERSION: cfg.kiroCliVersion },
       }),
+      // V2 snapshots the started container once per runtime version and restores each new session
+      // from it: cold starts drop from ~15 s (image pull) to ~2-3 s. Create/update take ~4 minutes
+      // longer, and the first few sessions after an update are slower until the snapshot is warm.
+      platformVersion: agentcore.PlatformVersion.V2,
       networkConfiguration: agentcore.RuntimeNetworkConfiguration.usingPublicNetwork(),
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingCognito(userPool, allClients, undefined, [SCOPE]),
       requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] },

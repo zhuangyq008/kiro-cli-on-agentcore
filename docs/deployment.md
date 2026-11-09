@@ -51,6 +51,12 @@ npx cdk deploy
 
 首次部署会在本机构建镜像（约 1.7 GB）并推送到 CDK 的 ECR 仓库，耗时取决于网络。
 
+Runtime 使用 AgentCore Runtime V2（platform version `V2`）：每次创建或更新 Runtime 时，平台会启动一次容器，在 `/ping` 首次返回健康后打快照；之后每个任务的 microVM 都从这个快照恢复，冷启动约 2–3 秒，与镜像大小无关（V1 需要 13–18 秒）。因此：
+
+- 每次部署，Runtime 的更新多出约 4 分钟（准备快照），CloudFormation 会等到 Runtime 变为 `READY`。
+- 部署后最初几个任务的 kiro-cli 首次启动会慢 5–20 秒，之后恢复正常。部署完成后可以运行几次 `kac models` 预热：每次调用都会使用新的 session，不消耗 credits。
+- 进程启动时执行的代码会被打进快照，被所有 microVM 共享。修改 runtime 代码时要遵守：随机数、ID、token 和当前时间都必须在处理请求时生成，不能在启动时生成；凭证不能在启动时读出后一直沿用（启动时创建的 boto3 client 使用可自动刷新的凭证）。现有的处理见 `runtime/src/kiro_runtime/snapshot.py`。
+
 ### 部署参数（`infra/cdk.json` 的 `context`，也可以用 `-c key=value` 覆盖）
 
 | 参数 | 默认值 | 说明 |

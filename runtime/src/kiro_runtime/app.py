@@ -22,6 +22,7 @@ from .kiro_config import MAX_BUNDLE_BYTES, KiroConfig, KiroConfigError, decode_b
 from .models import is_allowed, is_valid_model_id, resolve_default
 from .orchestrator import Orchestrator, TaskSpec
 from .secrets import SecretError
+from .snapshot import reseed_after_restore
 from .store import now_iso
 from .workspace import Workspace
 
@@ -35,7 +36,10 @@ MIN_TIMEOUT_SECONDS = 60
 MAX_KIRO_CONFIG_B64 = MAX_BUNDLE_BYTES * 4 // 3 + 4
 # `models` results are cached per microVM; listing runs kiro-cli and reads the API key secret.
 MODELS_CACHE_SECONDS = 300
-MODELS_LIST_TIMEOUT_SECONDS = 30
+# The first kiro-cli start in a microVM restored from a new snapshot was measured at up to ~21 s
+# (files paged in from the image). A single listing plus the cold start stays below kac's 60 s HTTP
+# timeout; a caller queued behind a listing that times out can still exceed it.
+MODELS_LIST_TIMEOUT_SECONDS = 45
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -177,6 +181,10 @@ class Services:
     workspace: Workspace
     # Models offered by the configured Kiro API key (reads the secret, runs kiro-cli --list-models).
     list_model_details: Callable[[], list[dict[str, Any]]]
+    # Once per microVM, on its first invocation. Under AgentCore Runtime V2 the process is snapshotted
+    # after startup and every microVM is restored from that snapshot, so per-microVM work cannot run
+    # at startup.
+    on_first_invocation: Callable[[], None] = lambda: None
 
 
 def models_response(cfg: Config, details: list[dict[str, Any]]) -> dict[str, Any]:
@@ -194,6 +202,20 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
     app = BedrockAgentCoreApp()
     lock = threading.Lock()
     state = {"running": False}
+    first_invocation_lock = threading.Lock()
+    first_invocation_state = {"done": False}
+
+    def first_invocation() -> None:
+        with first_invocation_lock:
+            if first_invocation_state["done"]:
+                return
+            # Under the lock, so concurrent first requests also wait for the fresh seed.
+            reseed_after_restore()
+            first_invocation_state["done"] = True
+        try:
+            services.on_first_invocation()
+        except Exception:
+            logger.exception("first-invocation hook failed")
 
     def background(spec: TaskSpec) -> None:
         job = app.add_async_task("kiro-loop", {"task_id": spec.task_id})
@@ -244,6 +266,7 @@ def create_app(cfg: Config, services: Services) -> BedrockAgentCoreApp:
 
     @app.entrypoint
     def invoke(payload: Any, context: Any) -> Any:
+        first_invocation()
         if not isinstance(payload, dict):
             return error("VALIDATION_ERROR", 400, "request body must be a JSON object")
         if payload.get("action") == "models":
@@ -382,8 +405,22 @@ def build_default_app() -> BedrockAgentCoreApp:
             cfg.kiro_bin, {"KIRO_API_KEY": secrets.kiro_api_key}, timeout=MODELS_LIST_TIMEOUT_SECONDS
         )
 
+    def runtime_started() -> None:
+        # One per microVM: emitted on the first invocation, since startup runs once per snapshot.
+        emit_metrics({"RuntimeStarted": (1, "Count")}, {"Service": "kiro-agentcore"})
+        # The clients above resolved their credentials at startup, i.e. inside the snapshot; log how
+        # (e.g. "container-role"), to confirm they are the refreshable kind. The method name only.
+        creds = session.get_credentials()
+        logger.info(
+            "runtime.started",
+            extra={"structured": {"credentials_method": getattr(creds, "method", None)}},
+        )
+
     services = Services(
-        store=store, make_orchestrator=make_orchestrator, workspace=ws, list_model_details=key_models
+        store=store,
+        make_orchestrator=make_orchestrator,
+        workspace=ws,
+        list_model_details=key_models,
+        on_first_invocation=runtime_started,
     )
-    emit_metrics({"RuntimeStarted": (1, "Count")}, {"Service": "kiro-agentcore"})
     return create_app(cfg, services)

@@ -414,3 +414,81 @@ def test_service_version_in_models_and_task_record(client):
     )
     invoke(c, {"action": "submit", "prompt": "x"})
     assert store.items[0]["service_version"] == service_version()
+
+
+def test_first_invocation_hook_runs_once_per_microvm(client, tmp_path):
+    # AgentCore Runtime V2 snapshots the process at startup; work that must happen in every microVM
+    # (fresh random seed, the RuntimeStarted metric) runs on the first invocation instead.
+    cfg = Config.from_env({"TASKS_TABLE": "t", "ARTIFACTS_BUCKET": "bkt", "EVENT_BUS_NAME": "b"})
+    calls = []
+    services = Services(
+        store=FakeStore(),
+        make_orchestrator=lambda spec: None,
+        workspace=Workspace(tmp_path / "ws1", tmp_path / "art1"),
+        list_model_details=lambda: [model("auto")],
+        on_first_invocation=lambda: calls.append("first"),
+    )
+    c = TestClient(create_app(cfg, services))
+    assert c.get("/ping").status_code == 200
+    assert calls == []  # health checks happen before the snapshot is taken
+    invoke(c, {"action": "models"})
+    invoke(c, {"action": "models"})
+    invoke(c, {"bogus": True})
+    assert calls == ["first"]
+
+
+def test_first_invocation_hook_failure_does_not_fail_the_request(tmp_path):
+    cfg = Config.from_env({"TASKS_TABLE": "t", "ARTIFACTS_BUCKET": "bkt", "EVENT_BUS_NAME": "b"})
+
+    def boom():
+        raise RuntimeError("metrics down")
+
+    services = Services(
+        store=FakeStore(),
+        make_orchestrator=lambda spec: None,
+        workspace=Workspace(tmp_path / "ws", tmp_path / "art"),
+        list_model_details=lambda: [model("auto")],
+        on_first_invocation=boom,
+    )
+    c = TestClient(create_app(cfg, services))
+    assert invoke(c, {"action": "models"}).json()["default_model"] == "auto"
+
+
+def test_concurrent_first_requests_wait_for_the_reseed(tmp_path, monkeypatch):
+    # No request in a restored microVM may run on the snapshot's `random` state, including a second
+    # request that arrives while the first one is still reseeding.
+    import kiro_runtime.app as app_module
+
+    reseeds = []
+
+    def slow_reseed():
+        reseeds.append("start")
+        time.sleep(0.3)
+        reseeds.append(time.monotonic())
+
+    monkeypatch.setattr(app_module, "reseed_after_restore", slow_reseed)
+    cfg = Config.from_env({"TASKS_TABLE": "t", "ARTIFACTS_BUCKET": "bkt", "EVENT_BUS_NAME": "b"})
+    hooks = []
+    services = Services(
+        store=FakeStore(),
+        make_orchestrator=lambda spec: None,
+        workspace=Workspace(tmp_path / "ws", tmp_path / "art"),
+        list_model_details=lambda: [model("auto")],
+        on_first_invocation=lambda: hooks.append("first"),
+    )
+    asgi = create_app(cfg, services)
+    finished = []
+
+    def request():
+        r = invoke(TestClient(asgi), {"bogus": True})
+        finished.append((time.monotonic(), r.json()["error"]["code"]))
+
+    threads = [threading.Thread(target=request) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert reseeds[0] == "start" and len(reseeds) == 2  # reseeded once
+    assert hooks == ["first"]
+    assert [code for _, code in finished] == ["VALIDATION_ERROR"] * 2
+    assert all(at >= reseeds[1] for at, _ in finished)

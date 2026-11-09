@@ -74,9 +74,12 @@ RUN git config --global user.name "kiro-agentcore" \
  && git config --global credential.https://github.com.helper \
     '!f() { test -n "$GITHUB_TOKEN" || exit 0; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
 
+# AgentCore Runtime V2 restores every microVM from one snapshot, which carries the startup state of
+# Python's `random`; the stock OpenTelemetry ID generators draw from it. Use one that reads the OS.
 ENV WORKSPACE_ROOT=/workspace \
     ARTIFACTS_DIR_ROOT=/tmp/artifacts \
-    KIRO_BIN=/home/agent/.local/bin/kiro-cli
+    KIRO_BIN=/home/agent/.local/bin/kiro-cli \
+    OTEL_PYTHON_ID_GENERATOR=snapshot_safe_xray
 
 EXPOSE 8080
 CMD ["opentelemetry-instrument", "python", "-m", "kiro_runtime.main"]

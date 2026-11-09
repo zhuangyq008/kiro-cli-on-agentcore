@@ -49,6 +49,23 @@
 
 在真实部署中验证：AgentCore 在 Runtime 创建时就会自动创建 `/aws/bedrock-agentcore/runtimes/<runtime_id>-DEFAULT`。CDK 再创建同名日志组会报 `AlreadyExists`，导致首次部署回滚。最终方案是用 CDK 的 `LogRetention` custom resource 在 Runtime 创建后设置 30 天保留期。部署后已确认保留期为 30 天。
 
+## 1.7 AgentCore Runtime V2（snapshot）冷启动
+
+2026-11-09 在 us-east-1 实测。用与现网相同的镜像（ECR 压缩后 500 MB，解压约 1.7 GB）、执行角色和配置，另建一个 V2 Runtime，与现网 V1 对比。客户端在 us-east-1 的 EC2 上，每次都用新的 session 调用，再在同一 session 上调一次作为热调用对照。
+
+| | V1 | V2 |
+|---|---|---|
+| 不合法请求（只有平台冷启动） | 13.6–17.5 s | 2.2–2.6 s |
+| `models`（读 secret + 启动 kiro-cli），稳定后 | 14.5–18.9 s | 2.5–3.2 s |
+| 其中容器内 handler 耗时 | 0.8–1.3 s | 0.7–1.0 s |
+| 同一 session 的热调用 | 0.25–0.28 s | 0.25–0.31 s |
+| Runtime 创建到 `READY` | 几秒 | 约 3.5 分钟 |
+
+- **新快照的前几次恢复较慢**：快照刚建好时，最初 5 次 `models` 冷调用耗时 23.3、23.8、6.6、21.7、2.8 秒，平台部分始终约 2–3 秒，多出来的时间都花在 kiro-cli 的首次启动上（4.5–20.8 秒）。kiro-cli 的文件不在快照里，需要从镜像按需加载。之后连续 8 次都在 3 秒左右。
+- **恢复后第一次读 secret**约 460 ms（V1 为 70–90 ms），是重新建立连接的开销。
+- **span ID 在 microVM 之间重复**：同一个 span ID 出现在多个 session 中。原因是 OpenTelemetry 默认的 ID 生成器使用 Python 的 `random`，其状态在快照里。trace ID 由 AgentCore 从上游传入，不受影响；后台线程里没有父 span 的 span 需要在本地生成 trace ID，同一秒内开始的两个任务会撞 ID。解决办法见 `runtime/src/kiro_runtime/snapshot.py`。
+- 空闲很久之后，新 session 会不会重新变慢，尚未验证。
+
 ## 对设计的调整
 
 1. 基础镜像改为 `public.ecr.aws/docker/library/python:3.12-slim-trixie`。

@@ -1,6 +1,6 @@
 [project]
 name = "kiro-runtime"
-version = "0.2.0"
+version = "0.2.1"
 description = "AgentCore Runtime wrapper that runs kiro-cli in a closed-loop orchestrator"
 requires-python = ">=3.12"
 dependencies = [
@@ -10,6 +10,10 @@ dependencies = [
     "pydantic>=2.8",
     "pyyaml>=6",
 ]
+
+# Selected by OTEL_PYTHON_ID_GENERATOR in the Dockerfile (see kiro_runtime/snapshot.py).
+[project.entry-points.opentelemetry_id_generator]
+snapshot_safe_xray = "kiro_runtime.snapshot:SnapshotSafeXRayIdGenerator"
 
 [dependency-groups]
 dev = [
