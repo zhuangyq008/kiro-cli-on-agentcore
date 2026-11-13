@@ -50,6 +50,28 @@ def test_requirements_caller_criteria_verbatim():
     assert any("expected exactly 0" in e for e in errs)
 
 
+def test_requirements_caller_criteria_tolerate_punctuation_width_and_spacing():
+    # Models often turn full-width CJK punctuation into ASCII and adjust spacing; that is not a rewrite.
+    original = "运行 pytest 全部通过，且至少有 5 个测试（覆盖 parse_rows）：不能跳过"
+    copied = "运行 pytest 全部通过, 且至少有 5 个测试(覆盖 parse_rows):不能跳过"
+    r = req()
+    r.acceptance_criteria[0].text = copied
+    assert check_requirements(r, [original]) == []
+    # A changed word or number is still a rewrite.
+    r.acceptance_criteria[0].text = copied.replace("5", "3")
+    assert any("verbatim" in e for e in check_requirements(r, [original]))
+
+
+def test_requirements_caller_criteria_keep_superscripts_and_digit_spacing():
+    # Only full-width forms are folded: superscripts carry meaning, and so does a space between digits.
+    cases = (("延迟 < 10⁶ 微秒", "延迟 < 106 微秒"), ("体积 2 m³", "体积 2 m3"),
+             ("重试 1 0 次", "重试 10 次"))
+    for original, rewritten in cases:
+        r = req()
+        r.acceptance_criteria[0].text = rewritten
+        assert any("verbatim" in e for e in check_requirements(r, [original])), original
+
+
 def test_requirements_source_and_duplicates():
     r = req(
         criteria=[

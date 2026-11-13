@@ -58,7 +58,7 @@ flowchart LR
     ORC --> CW
     SW --> DDB
     SW --> EB
-    KIRO -- "git / AWS 只读 API" --> Internet((公网))
+    KIRO -- "git / 软件包源 / AWS API（按 agentAwsAccess）" --> Internet((公网))
 ```
 
 ## 关键设计决策
@@ -140,7 +140,7 @@ Runtime 配置 `requestHeaderAllowlist: ["Authorization"]`，容器代码就能�
 
 ### D9：闭环模式可选，subagent 模式下流程仍由代码控制
 
-- `none`（默认）：不走闭环，`loop-direct` agent 运行一次 kiro-cli（共用硬性规则：不提问、AWS 只读、不输出凭证；没有交接 JSON 协议）。消息中直接给出 prompt、context 和验收标准，验收标准由 agent 自查、不做独立验证。kiro-cli 正常结束即 `SUCCEEDED`，阶段历史只有一条 `RUN`，报告包含最终回答，验收标准标为 `not_verified`。同步的 kiro 配置同样合并进 `loop-direct`。
+- `none`（默认）：不走闭环，`loop-direct` agent 运行一次 kiro-cli（共用硬性规则：不提问、不做 AWS 写操作、不输出凭证；没有交接 JSON 协议）。消息中直接给出 prompt、context 和验收标准，验收标准由 agent 自查、不做独立验证。kiro-cli 正常结束即 `SUCCEEDED`，阶段历史只有一条 `RUN`，报告包含最终回答，验收标准标为 `not_verified`。同步的 kiro 配置同样合并进 `loop-direct`。
 - `process`（默认）：每个阶段一个 kiro-cli 进程，`Orchestrator._run_phase` 通过 `KiroRunner` 运行。
 - `subagent`：只运行一个 kiro-cli，agent 为 `loop-orchestrator`（只有 `shell` 和 `subagent/loop-*` 工具，模型取 `ORCHESTRATOR_MODEL` 中第一个可用的）。`_loop` 在后台线程中照常运行，阶段执行器换成 `SubagentBridge`：每个阶段的消息写入 `loop/tasks/NNN-<agent>.md`，调度 agent 通过 `python -m kiro_runtime.loopctl next`（本地 Unix socket，每个任务一个 token，JSON 行协议，不用 pickle）取得要调用的 sub-agent 和任务文件；下一次调用表示上一阶段结束，编排器随即校验其结果。阶段 agent 把 JSON 写到消息指定的文件（sub-agent 的回复只会交给调度 agent）。
 - 握手规则：阶段只有在它的回答文件存在时才算完成；在此之前收到的 `next` 会拿回同一个请求并被要求重新调用 sub-agent（最多 2 次，之后交给校验处理）。每次尝试使用独立的回答路径 `loop/answers/<phase>-<轮次>-<尝试>-<随机串>.json`，被接受后改名为正式交接文件，迟到的写入不会影响已接受的结果。回复无法送达时撤销这次发放。没有新请求时 `next` 返回 `wait`，只有闭环结束才返回 `done`。sub-agent 功能（`chat.enableSubagent`）只在 subagent 模式的任务中于运行时打开。
@@ -257,7 +257,7 @@ Orchestrator 取结果的顺序：agent 仍然自己写了合法的 JSON 文件�
 - 系统工具：`git`、`curl`、`unzip`、`jq`、`ca-certificates`、AWS CLI v2。
 - kiro-cli：用官方安装脚本加 `--version` 安装固定版本（初始为 2.35.2，可通过构建参数修改），脚本会校验 sha256。
 - 以非 root 用户 `agent`（HOME=`/home/agent`）运行；`/workspace` 在构建时创建并归 `agent` 所有。
-- 预置 4 个 agent 配置，放在 `/home/agent/.kiro/agents/`：`loop-understand.json`、`loop-plan.json`、`loop-execute.json`、`loop-verify.json`。共同的约束包括：运行在无人值守的容器中、不得提问、AWS 权限只读、不打印环境变量中的凭证、按约定路径输出文件。
+- 预置 4 个 agent 配置，放在 `/home/agent/.kiro/agents/`：`loop-understand.json`、`loop-plan.json`、`loop-execute.json`、`loop-verify.json`。共同的约束包括：运行在无人值守的容器中、不得提问、不做 AWS 写操作（AWS 调用被拒绝时不重试，在结果中说明）、不打印环境变量中的凭证、按约定路径输出文件。
 
 #### 目录布局（microVM 内）
 
@@ -577,13 +577,14 @@ Bucket 配置：阻止全部公开访问，SSE-S3 加密，bucket policy 拒绝�
 
 | 权限 | 范围 |
 |---|---|
-| 托管策略 `ReadOnlyAccess` | 全账号只读，供运维类任务使用 |
+| 任务的 AWS 权限（`agentAwsAccess`） | 默认 `none`，不挂载任何托管策略。可选 `viewonly`（`job-function/ViewOnlyAccess`）、`readonly`（`ReadOnlyAccess`）或自定义托管策略 ARN，供运维类任务使用 |
 | `secretsmanager:GetSecretValue` | 只限两个 secret（按名称引用，ARN 用 `-??????` 后缀通配） |
 | `s3:PutObject` | 只限产物 bucket |
 | `dynamodb:GetItem/PutItem/UpdateItem` | 只限 Tasks 表 |
 | `events:PutEvents` | 只限本服务的总线 |
 | CloudWatch Logs / X-Ray / ECR 拉取 | AgentCore 运行所需 |
 | 显式 Deny | `iam:*`、`organizations:*`、`sts:AssumeRole`、`s3:DeleteObject*`、`s3:PutBucket*`、`secretsmanager:PutSecretValue/UpdateSecret/DeleteSecret/CreateSecret`、`dynamodb:DeleteTable` |
+| 显式 Deny（服务数据隔离） | Tasks 表上除 `GetItem/PutItem/UpdateItem` 以外的全部操作；产物 bucket 上除 `s3:PutObject` 以外的全部操作；本服务日志组上除写日志以外的全部操作；本服务 Cognito 用户池上的全部操作。保证开启读权限后，任务也不能扫描任务表、下载其他任务的产物、从日志里得到其他任务的 ID，或读到 machine client 的密钥 |
 
 kiro-cli 子进程和 wrapper 使用同一个执行角色，所以 agent 也能写任务表和产物 bucket，理论上可以篡改自己任务的状态或产物。这一点在已接受的风险范围内。
 
@@ -710,6 +711,6 @@ flowchart LR
 ## 已知风险
 
 - **共用 Kiro API key**：所有任务的用量和限流集中在一个 key 上。闭环模式每个任务至少运行 4 次 kiro-cli，最多 `2 + 2 × 轮数 + 回退次数` 次（另有重试），credit 消耗比单次执行高出数倍。
-- **`--trust-all-tools`**：仓库内容中的 prompt injection 可能让 agent 执行任意命令，读取并外传注入的凭证，或篡改本服务的任务记录和产物。缓解措施是 IAM 只读加显式 Deny、microVM 隔离，以及使用只授权所需仓库的 fine-grained Git token。
+- **`--trust-all-tools`**：仓库内容中的 prompt injection 可能让 agent 执行任意命令，读取并外传注入的凭证，或篡改本服务的任务记录和产物。缓解措施是任务默认没有 AWS 权限（按需开启只读）加显式 Deny、microVM 隔离，以及使用只授权所需仓库的 fine-grained Git token。
 - **验证偏差**：验证阶段与执行阶段使用同一模型，独立上下文和“必须提供证据”的要求能减少、但不能消除偏差。
 - **并发上限**：受账号 AgentCore Service Quotas 限制，部署文档会说明如何查询和申请提额。

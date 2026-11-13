@@ -12,7 +12,10 @@ from pathlib import Path
 
 # Rules every agent of this service follows (loop phases and the single-run agent).
 SHARED_RULES = """\
-- AWS access is read-only. Do not attempt create, update, delete or any other mutating AWS call.
+- AWS access depends on the deployment: tasks have either no AWS access or read-only access. \
+Never attempt create, update, delete or any other mutating AWS call. If an AWS call is denied, do \
+not retry it or look for another way in; state in your result that this deployment does not grant \
+that access.
 - Never print, echo, log or write the values of environment variables that hold credentials \
 (for example KIRO_API_KEY, GITHUB_TOKEN or any *_TOKEN / *_KEY / *_SECRET). Use them only by \
 reference, e.g. in a git credential helper or an HTTP header built inside a single command.

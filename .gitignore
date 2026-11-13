@@ -23,6 +23,8 @@ infra/test/*.d.ts
 
 # Local
 .DS_Store
+.coverage
+coverage/
 .env
 *.log
 

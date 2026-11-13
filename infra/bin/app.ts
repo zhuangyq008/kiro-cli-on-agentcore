@@ -33,6 +33,7 @@ const config: KiroAgentCoreConfig = {
   kiroCliVersion: ctx('kiroCliVersion'),
   cognitoDomainPrefix: app.node.tryGetContext('cognitoDomainPrefix') || `kiro-agentcore-${account ?? 'dev'}`,
   machineClientNames: app.node.tryGetContext('machineClientNames') ?? [],
+  agentAwsAccess: app.node.tryGetContext('agentAwsAccess') ?? 'none',
 };
 
 new KiroAgentCoreStack(app, 'KiroAgentCoreStack', {

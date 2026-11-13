@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -129,6 +130,22 @@ def _duplicates(ids: list[str]) -> list[str]:
 MAX_DERIVED_CRITERIA = 5
 
 
+# Full-width ASCII variants (U+FF01-FF5E) and the ideographic space.
+_FULL_WIDTH = {cp: cp - 0xFEE0 for cp in range(0xFF01, 0xFF5F)} | {0x3000: 0x20}
+_SPACE_AROUND_PUNCT = re.compile(r"\s*([^\w\s])\s*")
+
+
+def _comparable(text: str) -> str:
+    """A criterion with full-width forms folded to ASCII and spacing around punctuation dropped.
+
+    "Verbatim" guards against a criterion being reworded or weakened. Models routinely turn
+    full-width CJK punctuation into ASCII and adjust the spacing around it, which changes nothing.
+    Nothing else is folded: superscripts (10⁶) and the space in "1 0" change the meaning.
+    """
+    folded = " ".join(text.translate(_FULL_WIDTH).split())
+    return _SPACE_AROUND_PUNCT.sub(r"\1", folded)
+
+
 def check_requirements(req: Requirements, user_criteria: list[str]) -> list[str]:
     errors: list[str] = []
     derived = [c for c in req.acceptance_criteria if not c.id.startswith("U-")]
@@ -159,7 +176,7 @@ def check_requirements(req: Requirements, user_criteria: list[str]) -> list[str]
         item = by_id.get(f"U-{n}")
         if item is None:
             errors.append(f"requirements.json: caller criterion U-{n} is missing")
-        elif item.text.strip() != text.strip():
+        elif _comparable(item.text) != _comparable(text):
             errors.append(f"requirements.json: caller criterion U-{n} must be copied verbatim")
     return errors
 

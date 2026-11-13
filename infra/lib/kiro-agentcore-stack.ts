@@ -16,6 +16,7 @@ import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as schedulerTargets from 'aws-cdk-lib/aws-scheduler-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+import { PRESET_POLICY_NAMES, parseAgentAwsAccess } from './agent-access';
 import { validateModelConfig } from './model-config';
 
 export interface KiroAgentCoreConfig {
@@ -41,6 +42,11 @@ export interface KiroAgentCoreConfig {
   readonly cognitoDomainPrefix: string;
   /** Names of additional confidential app clients for system callers (client_credentials). */
   readonly machineClientNames: string[];
+  /**
+   * AWS access for tasks: "none" (default), "viewonly", "readonly", or managed policy ARNs
+   * (comma-separated string or list). See lib/agent-access.ts.
+   */
+  readonly agentAwsAccess?: unknown;
 }
 
 export interface KiroAgentCoreStackProps extends StackProps {
@@ -63,6 +69,7 @@ export class KiroAgentCoreStack extends Stack {
     if (!['none', 'process', 'subagent'].includes(loopMode)) {
       throw new Error(`defaultLoopMode must be "none", "process" or "subagent", got "${loopMode}"`);
     }
+    const awsAccess = parseAgentAwsAccess(cfg.agentAwsAccess);
     const repoRoot = path.join(__dirname, '..', '..');
 
     // ---------------------------------------------------------------- Cognito
@@ -197,11 +204,23 @@ export class KiroAgentCoreStack extends Stack {
       },
     });
 
+    const newLogGroup = (id: string) =>
+      new logs.LogGroup(this, id, { retention: LOG_RETENTION, removalPolicy: RemovalPolicy.DESTROY });
+    const queryLogs = newLogGroup('QueryFunctionLogs');
+    const sweeperLogs = newLogGroup('SweeperFunctionLogs');
+    const accessLogs = newLogGroup('QueryApiAccessLogs');
+
     const role = runtime.role;
     if (!(role instanceof iam.Role)) {
       throw new Error('expected the Runtime construct to create its execution role');
     }
-    role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('ReadOnlyAccess'));
+    // AWS access for tasks. Nothing by default: the wrapper's own needs are the statements below.
+    if (awsAccess.mode === 'viewonly' || awsAccess.mode === 'readonly') {
+      role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(PRESET_POLICY_NAMES[awsAccess.mode]));
+    }
+    awsAccess.policyArns.forEach((arn, i) =>
+      role.addManagedPolicy(iam.ManagedPolicy.fromManagedPolicyArn(this, `AgentAccessPolicy${i}`, arn)),
+    );
     kiroKeySecret.grantRead(role);
     gitSecret?.grantRead(role);
     role.addToPolicy(new iam.PolicyStatement({
@@ -239,6 +258,59 @@ export class KiroAgentCoreStack extends Stack {
       resources: ['*'],
     }));
 
+    // Task access must not open up this service's own data. The wrapper only reads and writes single
+    // task records by key and only uploads artifacts; with a read policy attached, a task could
+    // otherwise scan the table or download other tasks' prompts and results.
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'TasksTableOnlyItemAccess',
+      effect: iam.Effect.DENY,
+      notActions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+      resources: [table.tableArn, `${table.tableArn}/*`],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'ArtifactsWriteOnly',
+      effect: iam.Effect.DENY,
+      notActions: ['s3:PutObject'],
+      resources: [bucket.bucketArn, bucket.arnForObjects('*')],
+    }));
+
+    // The same goes for what would let a task find other tasks or impersonate a caller: the service's
+    // logs carry task IDs (and a task record can be read by ID), and the user pool's machine clients
+    // have secrets that DescribeUserPoolClient returns.
+    const serviceLogGroups = [queryLogs, sweeperLogs, accessLogs];
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'RuntimeLogsWriteOnly',
+      effect: iam.Effect.DENY,
+      notActions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams', 'logs:DescribeLogGroups'],
+      // All AgentCore runtime log groups (this one's ID would create a dependency cycle) and the
+      // Transaction Search spans, which carry other tasks' prompts and tool calls.
+      resources: ['/aws/bedrock-agentcore/runtimes/*', 'aws/spans'].flatMap((name) => {
+        const arn = `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:${name}`;
+        return [arn, `${arn}:*`];
+      }),
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'TracesWriteOnly',
+      effect: iam.Effect.DENY,
+      actions: [
+        'xray:BatchGetTraces', 'xray:GetTraceSummaries', 'xray:GetTraceGraph',
+        'xray:StartTraceRetrieval', 'xray:ListRetrievedTraces', 'xray:GetRetrievedTracesGraph',
+      ],
+      resources: ['*'],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'ServiceLogsAndUserPoolClosed',
+      effect: iam.Effect.DENY,
+      actions: ['logs:*', 'cognito-idp:*'],
+      resources: [
+        ...serviceLogGroups.flatMap((g) => {
+          const arn = `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:${g.logGroupName}`;
+          return [arn, `${arn}:*`];
+        }),
+        userPool.userPoolArn,
+      ],
+    }));
+
     // AgentCore creates the runtime log group itself as soon as the runtime exists, so it cannot be
     // pre-created here. LogRetention sets the 30-day retention on it (and creates it if still missing).
     const runtimeLogGroupName = `/aws/bedrock-agentcore/runtimes/${runtime.agentRuntimeId}-DEFAULT`;
@@ -250,7 +322,7 @@ export class KiroAgentCoreStack extends Stack {
 
     // ---------------------------------------------------------------- Lambdas
     const lambdaCode = lambda.Code.fromAsset(path.join(repoRoot, 'lambdas'), {
-      exclude: ['tests', '.venv', '**/__pycache__', '.pytest_cache', '.ruff_cache', 'pyproject.toml', 'uv.lock'],
+      exclude: ['tests', '.venv', '**/__pycache__', '.pytest_cache', '.ruff_cache', '.coverage', 'pyproject.toml', 'uv.lock'],
     });
     const fnDefaults = {
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -264,7 +336,7 @@ export class KiroAgentCoreStack extends Stack {
       handler: 'query_api.handler.handler',
       timeout: Duration.seconds(15),
       environment: { TASKS_TABLE: table.tableName, ARTIFACTS_BUCKET: bucket.bucketName },
-      logGroup: new logs.LogGroup(this, 'QueryFunctionLogs', { retention: LOG_RETENTION, removalPolicy: RemovalPolicy.DESTROY }),
+      logGroup: queryLogs,
     });
     queryFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:Query'],
@@ -278,7 +350,7 @@ export class KiroAgentCoreStack extends Stack {
       handler: 'sweeper.handler.handler',
       timeout: Duration.minutes(2),
       environment: { TASKS_TABLE: table.tableName, EVENT_BUS_NAME: bus.eventBusName, STALE_AFTER_SECONDS: '600' },
-      logGroup: new logs.LogGroup(this, 'SweeperFunctionLogs', { retention: LOG_RETENTION, removalPolicy: RemovalPolicy.DESTROY }),
+      logGroup: sweeperLogs,
     });
     sweeperFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query'],
@@ -295,7 +367,6 @@ export class KiroAgentCoreStack extends Stack {
 
     // --------------------------------------------------------------- Query API
     const authorizer = new HttpUserPoolAuthorizer('CognitoAuthorizer', userPool, { userPoolClients: allClients });
-    const accessLogs = new logs.LogGroup(this, 'QueryApiAccessLogs', { retention: LOG_RETENTION, removalPolicy: RemovalPolicy.DESTROY });
     const api = new apigwv2.HttpApi(this, 'QueryApi', {
       apiName: 'kiro-agentcore-query',
       createDefaultStage: false,
@@ -325,6 +396,7 @@ export class KiroAgentCoreStack extends Stack {
     out('DefaultModels', cfg.defaultModels.join(','));
     out('AllowedModels', cfg.allowedModels.join(','));
     out('DefaultLoopMode', loopMode);
+    out('AgentAwsAccess', awsAccess.label);
     out('ServiceVersion', cfg.serviceVersion);
     out('RuntimeLogGroupName', runtimeLogGroupName);
     out('QueryApiUrl', api.apiEndpoint);

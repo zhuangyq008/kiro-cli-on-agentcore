@@ -2,7 +2,7 @@
 
 ## 简介
 
-本项目将 kiro-cli 以 headless 模式运行在 Amazon Bedrock AgentCore Runtime 上，提供一个异步的远程 Kiro agent 服务。调用方（个人通过本地 CLI，或 CI/CD 等系统）提交 prompt 和上下文，服务在隔离的 microVM 中以**闭环模式**执行任务：理解需求、规划、执行、验证、处理反馈，验证不通过时回到相应阶段重做，直到验证通过或达到最大轮数。任务类型包括代码修改、只读 AWS 运维和问答。结果写入 S3，状态记录在 DynamoDB，调用方通过轮询查询状态并下载结果。
+本项目将 kiro-cli 以 headless 模式运行在 Amazon Bedrock AgentCore Runtime 上，提供一个异步的远程 Kiro agent 服务。调用方（个人通过本地 CLI，或 CI/CD 等系统）提交 prompt 和上下文，服务在隔离的 microVM 中以**闭环模式**执行任务：理解需求、规划、执行、验证、处理反馈，验证不通过时回到相应阶段重做，直到验证通过或达到最大轮数。任务类型包括代码修改、只读 AWS 运维（需要部署时开启 `agentAwsAccess`）和问答。结果写入 S3，状态记录在 DynamoDB，调用方通过轮询查询状态并下载结果。
 
 每个任务独立执行，结束即止，不支持在同一会话中追问。
 
@@ -88,7 +88,7 @@
 
 ### 需求 5：执行 kiro-cli
 
-**用户故事：** 作为调用方，我希望任务由 kiro-cli 在无人值守模式下完整执行，能读写代码、调用 shell 和 AWS 只读操作。
+**用户故事：** 作为调用方，我希望任务由 kiro-cli 在无人值守模式下完整执行，能读写代码、调用 shell，并在部署开启时执行 AWS 只读操作。
 
 #### 验收标准
 
@@ -184,7 +184,7 @@
 
 #### 验收标准
 
-1. THE Runtime 执行角色 SHALL 只拥有：AWS 只读权限、读取指定 secrets、写入产物 bucket、读写任务表、发布 EventBridge 事件、写日志和 trace 所需权限。
+1. THE Runtime 执行角色 SHALL 只拥有：按部署参数 `agentAwsAccess` 授予任务的 AWS 权限（默认没有，可选只读）、读取指定 secrets、写入产物 bucket、读写任务表、发布 EventBridge 事件、写日志和 trace 所需权限。
 2. THE Runtime 执行角色 SHALL 不拥有任何 IAM 写权限，也不能修改 secrets 或删除 S3 对象。
 3. THE 系统 SHALL 不在日志、任务记录、事件或产物中写入 Kiro API key、Git 凭证或 Cognito token。
 4. THE Runtime SHALL 使用公网网络模式。
@@ -230,7 +230,7 @@
 ## 已知风险
 
 - 所有任务共用一个 `KIRO_API_KEY`，Kiro 侧的用量额度和限流会集中在这一个 key 上。闭环模式每个任务至少运行 4 次 kiro-cli，credit 消耗约为单次执行的数倍。
-- `--trust-all-tools` 下，安全边界完全依赖 IAM 只读、microVM 隔离和凭证最小化。
+- `--trust-all-tools` 下，安全边界依赖执行角色的权限（任务默认没有 AWS 权限，按需开启只读）加显式 Deny、microVM 隔离和凭证最小化。
 - 验证阶段由同一模型完成，独立上下文可以减少、但不能消除“自己检查自己”的偏差。
 - 并发上限受账号 AgentCore Service Quotas 限制。
 
@@ -273,6 +273,6 @@
 #### 验收标准
 
 1. THE 提交请求 SHALL 支持 `loop_mode`：`none`（单次运行）、`process`、`subagent`（闭环，见需求 3）；默认值由部署参数 `defaultLoopMode` 决定，默认为 `none`。
-2. WHEN `loop_mode` 为 `none` THEN 系统 SHALL 只运行一次 kiro-cli，消息中包含 prompt、context 和验收标准，并保留硬性规则（不提问、AWS 只读、不输出凭证）。
+2. WHEN `loop_mode` 为 `none` THEN 系统 SHALL 只运行一次 kiro-cli，消息中包含 prompt、context 和验收标准，并保留硬性规则（不提问、不做 AWS 写操作、不输出凭证）。
 3. WHEN `loop_mode` 为 `none` THEN 系统 SHALL 不做独立验证；kiro-cli 正常结束时任务为 `SUCCEEDED`，超时为 `TIMED_OUT`，认证失败或异常退出为 `FAILED`；报告 SHALL 包含 agent 的最终回答，并把验收标准标为未经独立验证。
 4. THE 同步的 kiro 配置（需求 16）SHALL 同样适用于单次运行。

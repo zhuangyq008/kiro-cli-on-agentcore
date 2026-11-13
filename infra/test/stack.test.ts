@@ -117,12 +117,52 @@ test('runtime starts sessions from a snapshot (platform version V2)', () => {
   template.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { PlatformVersion: 'V2' });
 });
 
-test('runtime role is read-only with explicit denies and scoped writes', () => {
-  template.hasResourceProperties('AWS::IAM::Role', {
-    ManagedPolicyArns: Match.arrayWith([
-      Match.objectLike({ 'Fn::Join': Match.arrayWith([Match.arrayWith([':iam::aws:policy/ReadOnlyAccess'])]) }),
-    ]),
+function synth(overrides: Record<string, unknown>): Template {
+  const stack = new KiroAgentCoreStack(new App(), 'AccessStack', {
+    env: { account: '111111111111', region: 'us-east-1' },
+    config: { ...config, ...overrides },
   });
+  return Template.fromStack(stack);
+}
+
+function runtimeRole(t: Template): any {
+  const roles = Object.values(t.findResources('AWS::IAM::Role')) as any[];
+  const role = roles.find((r) =>
+    JSON.stringify(r.Properties.AssumeRolePolicyDocument).includes('bedrock-agentcore.amazonaws.com'),
+  );
+  expect(role).toBeDefined();
+  return role;
+}
+
+test('by default tasks get no AWS access: the runtime role has no managed policy', () => {
+  expect(runtimeRole(template).Properties.ManagedPolicyArns).toBeUndefined();
+  template.hasOutput('AgentAwsAccess', { Value: 'none' });
+});
+
+test.each([
+  ['readonly', ':iam::aws:policy/ReadOnlyAccess'],
+  ['viewonly', ':iam::aws:policy/job-function/ViewOnlyAccess'],
+])('agentAwsAccess %s attaches only the matching AWS managed policy', (access, suffix) => {
+  const t = synth({ agentAwsAccess: access });
+  const arns = runtimeRole(t).Properties.ManagedPolicyArns;
+  expect(arns).toHaveLength(1);
+  expect(JSON.stringify(arns[0])).toContain(suffix);
+  t.hasOutput('AgentAwsAccess', { Value: access });
+});
+
+test('agentAwsAccess accepts customer managed policy ARNs', () => {
+  const arn = 'arn:aws:iam::111111111111:policy/kiro-agent-read';
+  const t = synth({ agentAwsAccess: arn });
+  expect(runtimeRole(t).Properties.ManagedPolicyArns).toEqual([arn]);
+  t.hasOutput('AgentAwsAccess', { Value: arn });
+});
+
+test('synth rejects a write-capable or malformed agentAwsAccess', () => {
+  expect(() => synth({ agentAwsAccess: 'arn:aws:iam::aws:policy/AdministratorAccess' })).toThrow(/write access/);
+  expect(() => synth({ agentAwsAccess: 'everything' })).toThrow(/agentAwsAccess/);
+});
+
+test('runtime role has explicit denies and scoped writes', () => {
   const deny = statements().find((s) => s.Sid === 'DenyPrivilegedAndDestructive');
   expect(deny).toBeDefined();
   expect(deny.Effect).toBe('Deny');
@@ -137,6 +177,52 @@ test('runtime role is read-only with explicit denies and scoped writes', () => {
       expect(s.Action === '*' && s.Resource === '*').toBe(false);
     }
   }
+});
+
+// Whatever read access is added for tasks, it must not open up this service's own data: one task
+// could otherwise read every other task's prompts and results.
+test.each(['none', 'readonly'])('service data stays closed to tasks (agentAwsAccess %s)', (access) => {
+  const t = synth({ agentAwsAccess: access });
+  const all = Object.values(t.findResources('AWS::IAM::Policy')).flatMap(
+    (p: any) => p.Properties.PolicyDocument.Statement,
+  );
+  const table = all.find((s) => s.Sid === 'TasksTableOnlyItemAccess');
+  expect(table.Effect).toBe('Deny');
+  expect([...table.NotAction].sort()).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
+  expect(table.Resource).toHaveLength(2);
+  expect(JSON.stringify(table.Resource)).toContain('TasksTable');
+  expect(JSON.stringify(table.Resource[1])).toContain('/*');
+  // The Deny must leave open exactly what the wrapper is allowed to do, or the runtime breaks.
+  const tableAllow = all.find((s) => s.Sid === 'TasksTableWrite');
+  expect([...tableAllow.Action].sort()).toEqual([...table.NotAction].sort());
+  expect(all.find((s) => s.Sid === 'ArtifactsWrite').Action).toBe('s3:PutObject');
+
+  // Logs carry task IDs, and a task record can be read by ID; the user pool holds client secrets.
+  const runtimeLogs = all.find((s) => s.Sid === 'RuntimeLogsWriteOnly');
+  expect(runtimeLogs.Effect).toBe('Deny');
+  expect(runtimeLogs.NotAction).not.toContain('logs:GetLogEvents');
+  expect(runtimeLogs.NotAction).toEqual(expect.arrayContaining(['logs:CreateLogStream', 'logs:PutLogEvents']));
+  expect(JSON.stringify(runtimeLogs.Resource)).toContain('log-group:/aws/bedrock-agentcore/runtimes/*');
+  expect(JSON.stringify(runtimeLogs.Resource)).toContain('log-group:aws/spans');
+  const traces = all.find((s) => s.Sid === 'TracesWriteOnly');
+  expect(traces.Effect).toBe('Deny');
+  expect(traces.Action).toEqual(expect.arrayContaining(['xray:BatchGetTraces', 'xray:GetTraceSummaries']));
+  // The X-Ray daemon / OTEL exporter still needs to send traces and read sampling rules.
+  expect(traces.Action).not.toContain('xray:PutTraceSegments');
+  expect(traces.Action).not.toContain('xray:GetSamplingRules');
+  const closed = all.find((s) => s.Sid === 'ServiceLogsAndUserPoolClosed');
+  expect(closed.Effect).toBe('Deny');
+  expect([...closed.Action].sort()).toEqual(['cognito-idp:*', 'logs:*']);
+  const closedResources = JSON.stringify(closed.Resource);
+  for (const id of ['QueryFunctionLogs', 'SweeperFunctionLogs', 'QueryApiAccessLogs', 'UserPool']) {
+    expect(closedResources).toContain(id);
+  }
+
+  const bucket = all.find((s) => s.Sid === 'ArtifactsWriteOnly');
+  expect(bucket.Effect).toBe('Deny');
+  expect(bucket.NotAction).toBe('s3:PutObject');
+  expect(bucket.Resource).toHaveLength(2);
+  expect(JSON.stringify(bucket.Resource)).toContain('ArtifactsBucket');
 });
 
 test('secrets are referenced, not created', () => {

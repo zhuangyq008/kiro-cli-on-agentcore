@@ -74,6 +74,16 @@ cd kiro-cli-on-agentcore
 
 从旧版本升级时，向导会提示"新版本默认不再走闭环"并要求确认；之后的升级会沿用当前设置。
 
+**任务的 AWS 权限**：默认 `none`，任务不能访问你账号里的 AWS 资源。想让 agent 查询 AWS（例如做账号巡检、查资源配置）时，安装时按需开启：
+
+```bash
+./install.sh --aws-access viewonly    # 只能列出和查看资源配置，读不到数据内容
+./install.sh --aws-access readonly    # 全账号只读，包括 S3 对象、DynamoDB 数据、日志
+./install.sh --aws-access arn:aws:iam::123456789012:policy/my-agent-read   # 自己的托管策略
+```
+
+开启前请先看 [security.md](security.md) 里的选择建议。从 0.2.x 升级时，向导会提示"新版本的任务默认没有 AWS 权限"并要求确认（0.2.x 固定为全账号只读），`--yes` 模式下则必须带上 `--aws-access`；之后的升级会沿用当前设置。
+
 **等待期间请注意：**
 
 - CloudShell 在键盘空闲 20 到 30 分钟后会断开。请每隔 15 分钟左右在窗口里按一次回车。

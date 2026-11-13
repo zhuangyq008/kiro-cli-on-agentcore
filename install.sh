@@ -18,6 +18,10 @@
 #                          两项都不指定时：首次安装用默认值，升级时沿用当前设置
 #   --loop-mode MODE       任务默认的运行方式：none（默认，单次运行、不做独立验证）、
 #                          process 或 subagent（闭环、独立验证）；升级时不指定则沿用当前设置
+#   --aws-access ACCESS    任务可以使用的 AWS 权限：none（默认，没有 AWS 权限）、
+#                          viewonly（只能列出和查看资源配置，读不到数据内容）、
+#                          readonly（全账号只读，包括 S3 对象、DynamoDB 数据、日志），
+#                          或者自己的托管策略 ARN（多个用逗号分隔）；升级时不指定则沿用当前设置
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -41,6 +45,11 @@ INSTALL_KAC=true
 DEFAULT_MODEL_OPT=""
 ALLOWED_MODELS_OPT=""
 LOOP_MODE_OPT=""
+AWS_ACCESS_OPT=""
+# 具体规则（不接受带写权限的 AWS 托管策略等）由部署时的 CDK 校验。
+valid_aws_access() {
+  [[ "$1" =~ ^(none|viewonly|readonly)$ || "$1" =~ ^arn:aws:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=.@_/-]+(,arn:aws:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=.@_/-]+)*$ ]]
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --yes) ASSUME_YES=true; shift ;;
@@ -55,6 +64,10 @@ while [[ $# -gt 0 ]]; do
     --loop-mode)
       [[ $# -ge 2 && "$2" =~ ^(none|process|subagent)$ ]] || { echo "--loop-mode 只能是 none、process 或 subagent" >&2; exit 2; }
       LOOP_MODE_OPT="$2"; shift 2 ;;
+    --aws-access)
+      [[ $# -ge 2 ]] && valid_aws_access "${2// /}" \
+        || { echo "--aws-access 只能是 none、viewonly、readonly 或托管策略 ARN（多个用逗号分隔）" >&2; exit 2; }
+      AWS_ACCESS_OPT="${2// /}"; shift 2 ;;
     -h|--help) sed -n '2,/^set -euo pipefail/{/^set -euo/!p;}' "$0"; exit 0 ;;
     *) echo "未知参数：$1（用 --help 查看用法）" >&2; exit 2 ;;
   esac
@@ -198,7 +211,7 @@ upload_source() {
   local bucket="$1" key="source/$(date -u +%Y%m%dT%H%M%SZ).zip"
   (cd "$ROOT" && zip -qr "$TMP/source.zip" . \
     -x '.git/*' '*/node_modules/*' '*/.venv/*' 'infra/cdk.out/*' '*/__pycache__/*' '*/.pytest_cache/*' \
-       '*/.ruff_cache/*' '*.zip' '.DS_Store' '*/.DS_Store')
+       '*/.ruff_cache/*' '*.zip' '.DS_Store' '*/.DS_Store' 'demo/*/build/*' '*/.coverage' 'infra/coverage/*')
   aws s3 cp --only-show-errors "$TMP/source.zip" "s3://$bucket/$key"
   printf '%s/%s' "$bucket" "$key"
 }
@@ -213,12 +226,13 @@ env = [
   {"name": "KIRO_API_KEY_SECRET_NAME", "value": api, "type": "PLAINTEXT"},
   {"name": "GIT_CREDENTIALS_SECRET_NAME", "value": git, "type": "PLAINTEXT"},
 ]
-loop_mode = sys.argv[6]
-for name, value in (("DEFAULT_MODEL", default_model), ("ALLOWED_MODELS", allowed_models), ("DEFAULT_LOOP_MODE", loop_mode)):
+loop_mode, aws_access = sys.argv[6:8]
+for name, value in (("DEFAULT_MODEL", default_model), ("ALLOWED_MODELS", allowed_models),
+                    ("DEFAULT_LOOP_MODE", loop_mode), ("AGENT_AWS_ACCESS", aws_access)):
   if value:
     env.append({"name": name, "value": value, "type": "PLAINTEXT"})
 print(json.dumps(env))' "$1" "$API_KEY_SECRET" "${GIT_SECRET_EFFECTIVE:-NONE}" \
-    "${DEFAULT_MODEL_OPT:-}" "${ALLOWED_MODELS_OPT:-}" "${LOOP_MODE_OPT:-}")"
+    "${DEFAULT_MODEL_OPT:-}" "${ALLOWED_MODELS_OPT:-}" "${LOOP_MODE_OPT:-}" "${AWS_ACCESS_OPT:-}")"
   aws codebuild start-build --project-name "$PROJECT" --source-type-override S3 \
     --source-location-override "$2" --environment-variables-override "$env_json" \
     --query 'build.id' --output text
@@ -423,7 +437,22 @@ else
       confirm "按新的默认值 none 继续吗？" Y || die "已取消。"
     fi
   fi
+  if [[ "$APP_STATUS" == *COMPLETE && "$APP_STATUS" != *ROLLBACK_COMPLETE && -z "$AWS_ACCESS_OPT" ]]; then
+    CUR_ACCESS="$(stack_output "$APP_STACK" AgentAwsAccess 2>/dev/null || true)"
+    if [[ -n "$CUR_ACCESS" && "$CUR_ACCESS" != "None" ]] && valid_aws_access "$CUR_ACCESS"; then
+      AWS_ACCESS_OPT="$CUR_ACCESS"
+    else
+      warn "新版本的任务默认没有 AWS 权限。当前部署给任务的是全账号只读（ReadOnlyAccess）。"
+      # 这是一次权限变化，--yes 模式下不替用户做决定。
+      $ASSUME_YES && die "升级会改变任务的 AWS 权限，--yes 模式下需要明确指定。" \
+        "保留原来的权限加 --aws-access readonly；按新的默认值（没有 AWS 权限）加 --aws-access none。"
+      info "升级后，任务里的 AWS 查询（例如账号巡检）会被拒绝（AccessDenied）。"
+      info "要保留，请取消后加 --aws-access readonly 重新运行；范围更小的选择是 viewonly 或自己的策略 ARN。"
+      confirm "按新的默认值 none（任务没有 AWS 权限）继续吗？" Y || die "已取消。"
+    fi
+  fi
   info "任务默认的运行方式：${LOOP_MODE_OPT:-none（默认）}（none=单次运行；process/subagent=闭环、独立验证）"
+  info "任务的 AWS 权限：${AWS_ACCESS_OPT:-none（默认）}（none=没有；viewonly=只看资源配置；readonly=全账号只读）"
   info "默认模型（按顺序取第一个 Kiro API key 可用的）：${DEFAULT_MODEL_OPT:-claude-sonnet-5.5,gpt-5.6-terra,auto（默认）}"
   info "允许使用的模型：${ALLOWED_MODELS_OPT:-auto,claude-*,gpt-*（默认）}"
   info "可用 --default-model / --allowed-models 修改；部署后用 kac models 查看实际可用的模型。"

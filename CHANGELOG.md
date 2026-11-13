@@ -2,6 +2,26 @@
 
 版本号见仓库根目录的 `VERSION`。客户端（`kac --version`）和服务端（`kac models` 中的 service version）使用同一个版本号。
 
+## 0.3.0
+
+### 不兼容的变化
+
+- **任务默认不再有 AWS 权限。** 此前执行角色固定挂载全账号只读的 `ReadOnlyAccess`；现在默认只有服务自身需要的权限。依赖 AWS 查询的任务（例如账号巡检）升级后会收到 AccessDenied。要保留原来的行为，部署时加 `-c agentAwsAccess=readonly`（CloudShell：`./install.sh --aws-access readonly`）。CloudShell 向导在升级时会提示并要求确认；`--yes` 模式下必须用 `--aws-access` 明确指定。
+
+### 新功能
+
+- 部署参数 `agentAwsAccess`（CloudShell：`--aws-access`）：`none`（默认）、`viewonly`（只看资源配置，读不到数据内容）、`readonly`（全账号只读），或自己的托管策略 ARN。AWS 托管策略只接受只读的，自定义策略的内容由部署者负责。当前值记录在 stack 输出 `AgentAwsAccess`，升级时沿用。
+- 新增 [docs/security.md](docs/security.md)：数据流向、权限边界、已知风险与缓解、责任划分、上线前检查清单。
+
+### 安全
+
+- 执行角色新增五条显式 Deny，任何 `agentAwsAccess` 设置下都生效：任务表只允许按主键读写单条记录（不能 Scan / Query），产物 bucket 只允许上传（不能列出或下载），本服务的日志组、所有 AgentCore Runtime 的日志组和 `aws/spans` 只允许写入，不能读取 X-Ray trace，本服务的 Cognito 用户池不允许任何操作。此前在 `ReadOnlyAccess` 下，一个任务可以读到其他任务的 prompt 和结果，也可以读到 machine client 的密钥。
+- agent 的硬性规则相应调整：AWS 调用被拒绝时不重试、不绕路，在结果里说明当前部署没有授予该权限。
+
+### 修复
+
+- 闭环模式下，带中文全角标点（，：（）等）的验收标准不再导致任务失败。此前模型把全角标点写成半角后，UNDERSTAND 阶段会因"验收标准必须原样复制"被拒绝，任务以 `PHASE_OUTPUT_INVALID` 结束。现在比较时忽略全角/半角差异和标点两侧的空白；其他改动（包括上标、数字之间的空格）仍会被拒绝。
+
 ## 0.2.1
 
 ### 性能

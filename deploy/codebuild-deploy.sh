@@ -19,6 +19,9 @@ ARGS=(
 [[ -n "${DEFAULT_MODEL:-}" ]] && ARGS+=(-c "defaultModel=${DEFAULT_MODEL}")
 [[ -n "${ALLOWED_MODELS:-}" ]] && ARGS+=(-c "allowedModels=${ALLOWED_MODELS}")
 [[ -n "${DEFAULT_LOOP_MODE:-}" ]] && ARGS+=(-c "defaultLoopMode=${DEFAULT_LOOP_MODE}")
+# AWS access for tasks: none (default), viewonly, readonly or managed policy ARNs. install.sh always
+# passes the current value on upgrade; a build started without it deploys with no AWS access.
+[[ -n "${AGENT_AWS_ACCESS:-}" ]] && ARGS+=(-c "agentAwsAccess=${AGENT_AWS_ACCESS}")
 [[ -n "${COGNITO_DOMAIN_PREFIX:-}" ]] && ARGS+=(-c "cognitoDomainPrefix=${COGNITO_DOMAIN_PREFIX}")
 
 echo "==> cdk deploy ${APP_STACK_NAME}"
