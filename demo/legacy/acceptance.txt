@@ -1,0 +1,4 @@
+在产物目录运行 python3 -m pytest -q 全部通过 并且至少有 5 个测试
+迁移后的 plc_report.py 不再包含 Python 2 专有写法
+对同一份 CSV 输出的良率数值与 Python 2 版本一致
+产物目录中有 MIGRATION.md 逐项列出改动和行为差异

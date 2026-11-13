@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>kiro-cli on AgentCore 方案演示</title>
+<link rel="stylesheet" href="player.css">
+</head>
+<body>
+<div id="stage">
+
+  <section class="scene center" id="scene-title">
+    <div class="kicker">方案演示</div>
+    <h1>kiro-cli on AgentCore</h1>
+    <p class="lead">把 Kiro 的编码 agent 变成运行在你自己 AWS 账号里的异步服务</p>
+    <div class="chips">
+      <span>每个任务一个 microVM</span>
+      <span>结果进 S3，通知走 EventBridge</span>
+      <span>可选闭环和独立验证</span>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-problem">
+    <h2>在本地用 agent 写代码很方便，团队用起来有三个问题</h2>
+    <div class="cards three">
+      <div class="card" data-r="1"><div class="num">1</div><h3>占用开发者的电脑</h3><p>任务运行的时候人只能等，任务一多就排不开</p></div>
+      <div class="card" data-r="2"><div class="num">2</div><h3>权限和结果分散</h3><p>凭证、日志和产出留在每个人的机器上，难以管理和审计</p></div>
+      <div class="card" data-r="3"><div class="num">3</div><h3>接不进流水线</h3><p>很难在 CI 里批量、无人值守地运行</p></div>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-architecture">
+    <h2>把 kiro-cli 放到 AgentCore Runtime 上，变成一个异步服务</h2>
+    <div class="diagram" id="architecture-diagram"><!-- architecture.svg is inlined here by render.py --></div>
+  </section>
+
+  <section class="scene" id="scene-install">
+    <h2>安装：在 CloudShell 里运行一条命令</h2>
+    <div class="split">
+      <div class="shell-card" data-r="1">
+        <div class="shell-title">AWS CloudShell</div>
+        <pre><span class="p">$</span> git clone &lt;仓库地址&gt; kiro-cli-on-agentcore
+<span class="p">$</span> cd kiro-cli-on-agentcore
+<span class="p">$</span> <b>./install.sh</b></pre>
+      </div>
+      <ol class="steps" data-r="2">
+        <li>检查运行环境</li>
+        <li>配置 Kiro API key</li>
+        <li>配置 Git 凭证</li>
+        <li>准备部署工具</li>
+        <li>创建安装器</li>
+        <li>构建并部署服务</li>
+        <li>创建登录用户</li>
+        <li>冒烟测试</li>
+      </ol>
+    </div>
+    <div class="chips left" data-r="3">
+      <span>只用浏览器</span><span>约 30 分钟，大部分是等待部署</span><span>再次运行即可升级</span>
+    </div>
+  </section>
+
+  <section class="scene term-scene" id="scene-demo1">
+    <div class="term-head"><h2 class="term-heading"></h2><div class="term-badge"></div></div>
+    <div class="term"><div class="term-bar"><i></i><i></i><i></i><span>dev@laptop: ~/demo</span></div><pre class="term-body"></pre></div>
+  </section>
+
+  <section class="scene term-scene" id="scene-demo2">
+    <div class="term-head"><h2 class="term-heading"></h2><div class="term-badge"></div></div>
+    <div class="term"><div class="term-bar"><i></i><i></i><i></i><span>dev@laptop: ~/demo</span></div><pre class="term-body"></pre></div>
+  </section>
+
+  <section class="scene" id="scene-integration">
+    <h2>接进现有流程：事件通知和 CI</h2>
+    <div class="split even">
+      <div class="code-card" data-r="1">
+        <div class="code-title">任务结束时发布到 EventBridge 的事件</div>
+<pre>{
+  <span class="k">"source"</span>: "kiro.agentcore",
+  <span class="k">"detail-type"</span>: "TaskCompleted",
+  <span class="k">"detail"</span>: {
+    <span class="k">"task_id"</span>: "tsk_01M79GC2...",
+    <span class="k">"status"</span>: <span class="ok">"SUCCEEDED"</span>,
+    <span class="k">"criteria"</span>: { "total": 6, "passed": 6 },
+    <span class="k">"artifacts_prefix"</span>: "s3://.../tsk_01M79GC2.../",
+    <span class="k">"duration_ms"</span>: 198000
+  }
+}</pre>
+        <div class="chips left small"><span>飞书</span><span>钉钉</span><span>工单系统</span></div>
+      </div>
+      <div class="code-card" data-r="2">
+        <div class="code-title">在 CI 里用机器账号提交任务（GitHub Actions）</div>
+<pre>- name: 让 agent 修复 issue 并提 PR
+  env:
+    <span class="k">KAC_CLIENT_ID</span>: ${{ vars.KAC_CLIENT_ID }}
+    <span class="k">KAC_CLIENT_SECRET</span>: ${{ secrets.KAC_CLIENT_SECRET }}
+    <span class="c"># 其余 KAC_* 配置见 docs/kac.md</span>
+  run: |
+    TASK=$(kac submit "修复 issue #42 并提 PR" \
+      --context "仓库: ${{ github.repository }}" \
+      --ac "所有现有测试通过" \
+      --loop-mode process)
+    kac wait "$TASK"   <span class="c"># 退出码反映任务结果</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-security">
+    <h2>安全：四点设计，一点需要了解</h2>
+    <div class="cards four">
+      <div class="card" data-r="1"><div class="num">1</div><h3>部署在你自己的账号</h3><p>由 CloudFormation 管理，可以完整卸载</p></div>
+      <div class="card" data-r="2"><div class="num">2</div><h3>每个任务一个 microVM</h3><p>任务之间不共享文件、进程和内存，结束后回收</p></div>
+      <div class="card" data-r="3"><div class="num">3</div><h3>任务默认没有 AWS 权限</h3><p>需要时再按最小范围开启只读权限</p></div>
+      <div class="card" data-r="4"><div class="num">4</div><h3>登录后才能提交</h3><p>用户由管理员创建，每个人只能看到自己的任务</p></div>
+    </div>
+    <div class="note" data-r="5"><b>需要了解</b>　模型推理由 Kiro 服务完成，prompt 和 agent 读到的代码会发送过去。详见 docs/security.md</div>
+  </section>
+
+  <section class="scene" id="scene-cost">
+    <h2>成本：主要是模型用量</h2>
+    <div class="cards three stats">
+      <div class="card" data-r="1"><div class="stat">约 $1<small> / 月</small></div><h3>没有任务时</h3><p>基础设施的固定费用</p></div>
+      <div class="card" data-r="2"><div class="stat">&lt; $0.05</div><h3>单次运行的小任务</h3><p>问答、小函数、小改动</p></div>
+      <div class="card" data-r="3"><div class="stat">$2 – 2.5</div><h3>闭环的代码任务</h3><p>多文件改动加测试，20 到 30 分钟</p></div>
+    </div>
+    <div class="note" data-r="3">测试环境的实测数据（2026 年 11 月）：约 94% 的费用是 Kiro credits。估算方法见 docs/cost.md</div>
+  </section>
+
+  <section class="scene" id="scene-next">
+    <h2>下一步：用两周做一次概念验证</h2>
+    <ol class="plan" data-r="1">
+      <li><b>选题</b>选一个代码仓库，准备 3 到 5 个有代表性的任务和验收标准</li>
+      <li><b>安装</b>在沙箱账号里用 CloudShell 安装，约 30 分钟</li>
+      <li><b>评估</b>运行任务，对照验收结果、耗时和成本数据做判断</li>
+    </ol>
+    <p class="thanks">谢谢观看</p>
+  </section>
+
+  <div id="caption"><span></span></div>
+  <div id="progress"><i></i></div>
+</div>
+<script src="build/timeline.js"></script>
+<script src="player.js"></script>
+</body>
+</html>

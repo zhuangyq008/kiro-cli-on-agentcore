@@ -1,0 +1,131 @@
+{
+  "title": "kiro-cli on AgentCore 方案演示",
+  "voice": { "id": "Zhiyu", "engine": "neural", "language": "cmn-CN" },
+  "pronunciations": {
+    "kiro-cli": "Kiro C L I",
+    "kac": "K A C",
+    "AgentCore": "Agent Core",
+    "microVM": "micro V M",
+    "CloudShell": "Cloud Shell",
+    "EventBridge": "Event Bridge",
+    "DynamoDB": "Dynamo D B",
+    "Cognito": "Cognito",
+    "Modbus": "Mod bus",
+    "CI": "C I",
+    "S3": "S 3",
+    "AWS": "A W S",
+    "GPT": "G P T",
+    "Claude": "Claude",
+    "Python": "Python",
+    "Kiro": "Kiro",
+    "Amazon Bedrock": "Amazon Bedrock",
+    "agent": "agent"
+  },
+  "scenes": [
+    {
+      "id": "title",
+      "kind": "title",
+      "say": [
+        { "text": "这是 kiro-cli on AgentCore。" },
+        { "text": "它把 Kiro 的编码 agent，变成运行在你自己 AWS 账号里的异步服务。" }
+      ]
+    },
+    {
+      "id": "problem",
+      "kind": "cards",
+      "say": [
+        { "text": "在本地用 agent 写代码很方便，但团队用起来会遇到三个问题。" },
+        { "text": "第一，任务占着开发者的电脑，运行的时候人只能等。", "reveal": 1 },
+        { "text": "第二，权限和结果分散在每个人的机器上，难以管理和审计。", "reveal": 2 },
+        { "text": "第三，很难接进 CI，批量地、无人值守地运行。", "reveal": 3 }
+      ]
+    },
+    {
+      "id": "architecture",
+      "kind": "architecture",
+      "say": [
+        { "text": "这套方案把 kiro-cli 放到 Amazon Bedrock AgentCore Runtime 上运行。", "reveal": 1 },
+        { "text": "开发者或者 CI 用 kac 命令提交任务，通过 Cognito 登录。", "reveal": 2 },
+        { "text": "每个任务运行在一个独立的 microVM 里，任务结束后回收。", "reveal": 3 },
+        { "text": "结果写入 S3，状态记录在 DynamoDB，任务结束时通过 EventBridge 发出通知。", "reveal": 4 },
+        { "text": "这些资源都部署在你自己的 AWS 账号里，模型推理由 Kiro 服务完成。", "reveal": 5 }
+      ]
+    },
+    {
+      "id": "install",
+      "kind": "install",
+      "say": [
+        { "text": "安装只需要在 CloudShell 里运行一条命令。", "reveal": 1 },
+        { "text": "向导会检查环境、保存密钥、完成部署，并自动运行冒烟测试。", "reveal": 2 },
+        { "text": "全程只用浏览器，大约三十分钟。", "reveal": 3 }
+      ]
+    },
+    {
+      "id": "demo1",
+      "kind": "terminal",
+      "cast": "demo1",
+      "heading": "演示 1　一个小任务，单次运行",
+      "steps": {
+        "models": [{ "text": "先看看可以用哪些模型，Claude 和 GPT 系列都可以选。" }],
+        "submit": [{ "text": "提交第一个任务：写一个解码 Modbus 寄存器的函数，并附带单元测试。" }],
+        "wait": [{ "text": "提交后拿到任务编号。任务在云端运行，本地不需要保持连接。" }],
+        "result": [{ "text": "任务完成后，把结果下载到本地，代码和测试文件都在。" }],
+        "pytest": [{ "text": "在本地再运行一遍测试，全部通过。" }]
+      }
+    },
+    {
+      "id": "demo2",
+      "kind": "terminal",
+      "cast": "demo2",
+      "heading": "演示 2　需要可靠交付的任务，闭环加独立验证",
+      "steps": {
+        "legacy": [{ "text": "再看一个需要可靠交付的任务。这是一个在产线上运行了多年的 Python 2 脚本。" }],
+        "submit": [{ "text": "我们要把它迁移到 Python 3。这次加上验收标准，并打开闭环模式。" }],
+        "wait": [
+          { "text": "任务会依次经过理解需求、规划、执行和验证四个阶段。" },
+          { "text": "验证阶段使用全新的上下文，逐条检查验收标准，并且必须给出证据。" },
+          { "text": "验证不通过时，会回退到相应的阶段重做。" }
+        ],
+        "result": [{ "text": "任务完成后，把报告下载下来。" }],
+        "report": [{ "text": "报告里每一条验收标准，都有结论和对应的证据。" }]
+      }
+    },
+    {
+      "id": "integration",
+      "kind": "integration",
+      "say": [
+        { "text": "任务结束时，服务会向 EventBridge 发布事件，可以接到飞书、钉钉或者工单系统。", "reveal": 1 },
+        { "text": "在 CI 里，用机器账号调用同一条命令，就可以批量运行任务。", "reveal": 2 }
+      ]
+    },
+    {
+      "id": "security",
+      "kind": "cards",
+      "say": [
+        { "text": "安全方面有四点。" },
+        { "text": "所有资源部署在你自己的账号里，可以完整卸载。", "reveal": 1 },
+        { "text": "每个任务运行在独立的 microVM 里，互相隔离。", "reveal": 2 },
+        { "text": "任务默认没有访问你 AWS 资源的权限，需要时再按最小范围开启。", "reveal": 3 },
+        { "text": "只有管理员创建的用户才能提交任务，每个人只能看到自己的任务。", "reveal": 4 },
+        { "text": "需要了解的是，任务的内容会发送到 Kiro 服务做模型推理。", "reveal": 5 }
+      ]
+    },
+    {
+      "id": "cost",
+      "kind": "cost",
+      "say": [
+        { "text": "成本方面，没有任务的时候，基础设施每月大约一美元。", "reveal": 1 },
+        { "text": "一个单次运行的小任务，不到五美分。", "reveal": 2 },
+        { "text": "一个闭环的代码任务，大约两到两个半美元，主要是模型的用量。", "reveal": 3 }
+      ]
+    },
+    {
+      "id": "next",
+      "kind": "next",
+      "say": [
+        { "text": "下一步，可以选一个代码仓库，用两周时间做一次概念验证。", "reveal": 1 },
+        { "text": "谢谢观看。" }
+      ]
+    }
+  ]
+}

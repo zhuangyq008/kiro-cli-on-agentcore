@@ -20,6 +20,10 @@ UNDERSTAND（理解需求）→ PLAN（规划）→ EXECUTE（执行）→ VERIF
 - 结果写入 S3，状态记录在 DynamoDB，任务结束时向 EventBridge 发布事件。
 - 本地用 `kac` 命令行提交任务、查询状态和下载结果，鉴权使用 Cognito OAuth。
 
+![架构](docs/images/architecture.png)
+
+所有资源部署在你自己的 AWS 账号里；模型推理由 Kiro 服务完成，任务的 prompt 和 agent 读到的代码会发送过去（见 [docs/security.md](docs/security.md)）。
+
 ## 目录
 
 | 路径 | 内容 |
@@ -30,7 +34,8 @@ UNDERSTAND（理解需求）→ PLAN（规划）→ EXECUTE（执行）→ VERIF
 | `cli/` | `kac` 命令行工具 |
 | `scripts/` | `bootstrap.sh`（前置检查与 secret 引导）、`smoke_test.sh`（部署后冒烟测试）、`local_loop_check.py`（本地容器内跑一次真实闭环）、`cloudshell-sim/`（模拟 CloudShell 测试安装向导） |
 | `install.sh`、`deploy/` | CloudShell 交互式安装向导，以及它使用的 CodeBuild 安装器 |
-| `docs/` | 部署文档、kac 使用说明、技术验证结论 |
+| `docs/` | 部署文档、kac 使用说明、安全说明、成本估算、技术验证结论 |
+| `demo/` | 给客户演示用的材料：演示脚本、示例任务，以及演示视频和方案介绍 PPT 的生成脚本 |
 | `.kiro/specs/kiro-cli-on-agentcore/` | 需求、设计、任务清单 |
 
 ## 快速开始
@@ -63,6 +68,8 @@ kac wait <task_id> && kac result <task_id>
 | [docs/cloudshell-install.md](docs/cloudshell-install.md) | 不熟悉 AWS 的客户：在 CloudShell 中一步步安装、登录、提交第一个任务、升级、卸载 |
 | [docs/kac.md](docs/kac.md) | 所有使用者：kac 命令、退出码、错误码 |
 | [docs/deployment.md](docs/deployment.md) | 开发者和运维：本机部署、部署参数、日志与指标、并发配额 |
+| [docs/security.md](docs/security.md) | 安全和合规评审：数据流向、权限边界、已知风险、责任划分、上线前检查清单 |
+| [docs/cost.md](docs/cost.md) | 技术和预算负责人：费用构成、实测数据、月度估算、控制成本的方法 |
 | [docs/spike-findings.md](docs/spike-findings.md) | 开发者：kiro-cli headless 和 AgentCore 的技术验证结论 |
 | [CHANGELOG.md](CHANGELOG.md) | 所有人：各版本的变化，升级前请先看"不兼容的变化" |
 | [.kiro/specs/kiro-cli-on-agentcore/](.kiro/specs/kiro-cli-on-agentcore/) | 开发者：需求、设计、任务清单 |
@@ -80,9 +87,12 @@ make image     # 本地构建 linux/arm64 镜像
 
 kiro-cli 以 `--trust-all-tools` 运行，agent 可以在容器内执行任意命令。安全边界依靠以下几点：
 
-- **执行角色只读**：执行角色挂载 `ReadOnlyAccess`，并显式 Deny IAM、AssumeRole、S3 删除、secret 修改等操作。
+- **任务默认没有 AWS 权限**：执行角色只有服务自身需要的权限（读两个 secret、写任务表、写产物 bucket、发事件），并显式 Deny IAM、AssumeRole、S3 删除、secret 修改等操作。需要让任务查询 AWS 时，部署时用 `agentAwsAccess` 按需开启：`viewonly`（只看资源配置）、`readonly`（全账号只读）或自己的托管策略 ARN。
+- **服务数据不对任务开放**：无论开启哪种权限，任务都不能扫描任务表、下载产物 bucket 里的文件、读取本服务的日志或访问本服务的 Cognito 用户池。
 - **microVM 隔离**：每个任务一个 microVM，任务结束 5 分钟后回收。
 - **凭证最小化**：Git token 只授权给 agent 需要操作的仓库，建议使用 fine-grained token。
-- **同步的 kiro 配置**：`--kiro-dir` 带上的 MCP server 在 microVM 里以同样的权限运行，可以访问执行角色的只读权限和任务环境变量。只同步可信的配置。MCP 配置里的明文密钥会随任务传输，最好改用 `${VAR}` 并放到任务环境变量 secret 里。
+- **同步的 kiro 配置**：`--kiro-dir` 带上的 MCP server 在 microVM 里以同样的权限运行，可以使用执行角色的权限和任务环境变量。只同步可信的配置。MCP 配置里的明文密钥会随任务传输，最好改用 `${VAR}` 并放到任务环境变量 secret 里。
+
+完整说明见 [docs/security.md](docs/security.md)：数据流向、权限边界、风险与缓解、上线前检查清单。
 
 已知风险：仓库内容里的 prompt injection 可能让 agent 执行恶意命令、外传容器内的凭证，或改写本服务自己的任务记录和产物。所有任务共用同一个 Kiro API key，用量和限流会集中在这个 key 上。闭环模式下，每个任务至少运行 4 次 kiro-cli。
